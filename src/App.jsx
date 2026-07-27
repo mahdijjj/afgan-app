@@ -219,17 +219,22 @@ export default function AfganApp() {
     setTimeout(() => setToast(null), 2600);
   }
 
-  function placeOrder(order) {
+  // ثبت سفارش و کسر کیف پول را در یک عملیات واحد و یک درخواست ذخیره‌سازی انجام می‌دهد
+  // تا دو درخواست جداگانه با هم رقابت نکنند و باعث گم‌شدن سفارش یا کسر نشدن کیف پول نشوند.
+  function placeOrderAndDeduct(order, deductAmount) {
     const full = { id: newId("ord"), trackingCode: genTrackingCode(), date: new Date().toISOString(), status: "pending", ...order };
-    saveOrders([full, ...(orders || [])]);
+    const newOrders = [full, ...(orders || [])];
+    let newCustomers = customers;
+    if (currentCustomer && deductAmount) {
+      newCustomers = (customers || []).map((c) =>
+        c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - deductAmount } : c
+      );
+      setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - deductAmount } : prev));
+    }
+    setOrders(newOrders);
+    setCustomers(newCustomers);
+    persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
     return full;
-  }
-
-  function deductWallet(amount) {
-    if (!currentCustomer) return;
-    const next = (customers || []).map((c) => (c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - amount } : c));
-    saveCustomers(next);
-    setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - amount } : prev));
   }
 
   function requireLogin() {
@@ -269,16 +274,18 @@ export default function AfganApp() {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
-              const full = placeOrder({
-                type: "internet",
-                item: item.title,
-                price: item.price,
-                currency: item.currency || "TOMAN",
-                customerName: currentCustomer ? currentCustomer.name : "",
-                phone: form.phone,
-                customerId: currentCustomer ? currentCustomer.id : undefined,
-              });
-              if (currentCustomer) deductWallet(full.price);
+              const full = placeOrderAndDeduct(
+                {
+                  type: "internet",
+                  item: item.title,
+                  price: item.price,
+                  currency: item.currency || "TOMAN",
+                  customerName: currentCustomer ? currentCustomer.name : "",
+                  phone: form.phone,
+                  customerId: currentCustomer ? currentCustomer.id : undefined,
+                },
+                currentCustomer ? item.price : 0
+              );
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -299,16 +306,18 @@ export default function AfganApp() {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
-              const full = placeOrder({
-                type: "credit",
-                item: item.title,
-                price: item.price,
-                currency: item.currency || "TOMAN",
-                customerName: currentCustomer ? currentCustomer.name : "",
-                phone: form.phone,
-                customerId: currentCustomer ? currentCustomer.id : undefined,
-              });
-              if (currentCustomer) deductWallet(full.price);
+              const full = placeOrderAndDeduct(
+                {
+                  type: "credit",
+                  item: item.title,
+                  price: item.price,
+                  currency: item.currency || "TOMAN",
+                  customerName: currentCustomer ? currentCustomer.name : "",
+                  phone: form.phone,
+                  customerId: currentCustomer ? currentCustomer.id : undefined,
+                },
+                currentCustomer ? item.price : 0
+              );
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -332,21 +341,23 @@ export default function AfganApp() {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
-              const full = placeOrder({
-                type: "remittance",
-                item: "حواله ارزی",
-                price: amountAfn,
-                currency: "AFN",
-                tomanAmount,
-                afnRateUsed: Number(afnRateValue) || 0,
-                customerName: form.senderName,
-                phone: form.phone,
-                receiverName: form.receiverName,
-                destination: form.destination,
-                notes: form.notes,
-                customerId: currentCustomer ? currentCustomer.id : undefined,
-              });
-              if (currentCustomer) deductWallet(tomanAmount);
+              const full = placeOrderAndDeduct(
+                {
+                  type: "remittance",
+                  item: "حواله ارزی",
+                  price: amountAfn,
+                  currency: "AFN",
+                  tomanAmount,
+                  afnRateUsed: Number(afnRateValue) || 0,
+                  customerName: form.senderName,
+                  phone: form.phone,
+                  receiverName: form.receiverName,
+                  destination: form.destination,
+                  notes: form.notes,
+                  customerId: currentCustomer ? currentCustomer.id : undefined,
+                },
+                currentCustomer ? tomanAmount : 0
+              );
               setLastOrder(full);
               setPage("confirm");
             }}
