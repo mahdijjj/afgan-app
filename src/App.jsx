@@ -60,6 +60,8 @@ export default function AfganApp() {
   const [rates, setRates] = useState(null);
   const [orders, setOrders] = useState(null);
   const [cardInfo, setCardInfo] = useState(null);
+  const [customers, setCustomers] = useState(null);
+  const [currentCustomer, setCurrentCustomer] = useState(null);
   const [lastOrder, setLastOrder] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -83,6 +85,7 @@ export default function AfganApp() {
           setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
           setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
+          setCustomers((prev) => (JSON.stringify(prev) !== JSON.stringify(record.customers) ? record.customers : prev));
         }
       } catch (e) {
         // network hiccup - just try again next interval
@@ -103,6 +106,7 @@ export default function AfganApp() {
     let rates = (record && record.rates) || [];
     let orders = (record && record.orders) || [];
     let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
+    let customers = (record && record.customers) || [];
     let needsSeed = false;
 
     if (!products.length) {
@@ -116,13 +120,16 @@ export default function AfganApp() {
     if (!record || !record.cardInfo) {
       needsSeed = true;
     }
+    if (!record || !record.customers) {
+      needsSeed = true;
+    }
 
     if (needsSeed) {
       try {
         await fetch(JSONBIN_URL, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-          body: JSON.stringify({ products, rates, orders, cardInfo }),
+          body: JSON.stringify({ products, rates, orders, cardInfo, customers }),
         });
       } catch (e) {}
     }
@@ -131,6 +138,7 @@ export default function AfganApp() {
     setRates(rates);
     setOrders(orders);
     setCardInfo(cardInfo);
+    setCustomers(customers);
     setLoaded(true);
   }
 
@@ -146,19 +154,23 @@ export default function AfganApp() {
 
   async function saveProducts(next) {
     setProducts(next);
-    persist({ products: next, rates, orders, cardInfo });
+    persist({ products: next, rates, orders, cardInfo, customers });
   }
   async function saveRates(next) {
     setRates(next);
-    persist({ products, rates: next, orders, cardInfo });
+    persist({ products, rates: next, orders, cardInfo, customers });
   }
   async function saveOrders(next) {
     setOrders(next);
-    persist({ products, rates, orders: next, cardInfo });
+    persist({ products, rates, orders: next, cardInfo, customers });
   }
   async function saveCardInfo(next) {
     setCardInfo(next);
-    persist({ products, rates, orders, cardInfo: next });
+    persist({ products, rates, orders, cardInfo: next, customers });
+  }
+  async function saveCustomers(next) {
+    setCustomers(next);
+    persist({ products, rates, orders, cardInfo, customers: next });
   }
 
   function showToast(msg) {
@@ -170,6 +182,13 @@ export default function AfganApp() {
     const full = { id: newId("ord"), trackingCode: genTrackingCode(), date: new Date().toISOString(), status: "pending", ...order };
     saveOrders([full, ...(orders || [])]);
     return full;
+  }
+
+  function deductWallet(amount) {
+    if (!currentCustomer) return;
+    const next = (customers || []).map((c) => (c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - amount } : c));
+    saveCustomers(next);
+    setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - amount } : prev));
   }
 
   if (!loaded) {
@@ -187,7 +206,7 @@ export default function AfganApp() {
   return (
     <div className="afgan-root" dir="rtl" lang="fa">
       <Style />
-      <Header onAdmin={() => setPage(isAdmin ? "admin" : "adminLogin")} />
+      <Header onAdmin={() => setPage(isAdmin ? "admin" : "adminLogin")} onCustomer={() => setPage(currentCustomer ? "customerProfile" : "customerLogin")} />
       <main className="afgan-main">
         {page === "home" && <Home rates={rates} cardInfo={cardInfo} setPage={setPage} />}
         {page === "internet" && (
@@ -196,7 +215,20 @@ export default function AfganApp() {
             icon="📶"
             products={products.filter((p) => p.category === "internet" && p.active)}
             onOrder={(item, form) => {
-              const full = placeOrder({ type: "internet", item: item.title, price: item.price, currency: item.currency || "TOMAN", customerName: form.name, phone: form.phone });
+              if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
+                showToast("موجودی شما کافی نیست");
+                return;
+              }
+              const full = placeOrder({
+                type: "internet",
+                item: item.title,
+                price: item.price,
+                currency: item.currency || "TOMAN",
+                customerName: form.name,
+                phone: form.phone,
+                customerId: currentCustomer ? currentCustomer.id : undefined,
+              });
+              if (currentCustomer) deductWallet(full.price);
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -209,7 +241,20 @@ export default function AfganApp() {
             icon="📞"
             products={products.filter((p) => p.category === "credit" && p.active)}
             onOrder={(item, form) => {
-              const full = placeOrder({ type: "credit", item: item.title, price: item.price, currency: item.currency || "TOMAN", customerName: form.name, phone: form.phone });
+              if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
+                showToast("موجودی شما کافی نیست");
+                return;
+              }
+              const full = placeOrder({
+                type: "credit",
+                item: item.title,
+                price: item.price,
+                currency: item.currency || "TOMAN",
+                customerName: form.name,
+                phone: form.phone,
+                customerId: currentCustomer ? currentCustomer.id : undefined,
+              });
+              if (currentCustomer) deductWallet(full.price);
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -219,17 +264,24 @@ export default function AfganApp() {
         {page === "remittance" && (
           <RemittanceForm
             onSubmit={(form) => {
+              const amount = Number(form.amount) || 0;
+              if (currentCustomer && (currentCustomer.wallet || 0) < amount) {
+                showToast("موجودی شما کافی نیست");
+                return;
+              }
               const full = placeOrder({
                 type: "remittance",
                 item: "حواله ارزی",
-                price: Number(form.amount) || 0,
+                price: amount,
                 currency: "AFN",
                 customerName: form.senderName,
                 phone: form.phone,
                 receiverName: form.receiverName,
                 destination: form.destination,
                 notes: form.notes,
+                customerId: currentCustomer ? currentCustomer.id : undefined,
               });
+              if (currentCustomer) deductWallet(full.price);
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -237,7 +289,7 @@ export default function AfganApp() {
           />
         )}
         {page === "confirm" && lastOrder && <OrderConfirmation order={lastOrder} onDone={() => setPage("home")} />}
-        {page === "orders" && <MyOrders orders={orders} onBack={() => setPage("home")} />}
+        {page === "orders" && <MyOrders orders={orders} currentCustomer={currentCustomer} onBack={() => setPage("home")} />}
         {page === "adminLogin" && (
           <AdminLogin
             onLogin={(email, pw) => {
@@ -251,18 +303,45 @@ export default function AfganApp() {
             onBack={() => setPage("home")}
           />
         )}
+        {page === "customerLogin" && (
+          <CustomerLogin
+            customers={customers}
+            onLogin={(customer) => {
+              setCurrentCustomer(customer);
+              setPage("customerProfile");
+            }}
+            onBack={() => setPage("home")}
+            showToast={showToast}
+          />
+        )}
+        {page === "customerProfile" && currentCustomer && (
+          <CustomerProfile
+            customer={currentCustomer}
+            customers={customers}
+            saveCustomers={saveCustomers}
+            setCurrentCustomer={setCurrentCustomer}
+            onLogout={() => {
+              setCurrentCustomer(null);
+              setPage("home");
+            }}
+            onBack={() => setPage("home")}
+            showToast={showToast}
+          />
+        )}
         {page === "admin" && isAdmin && (
           <AdminPanel
             products={products}
             rates={rates}
             orders={orders}
             cardInfo={cardInfo}
+            customers={customers}
             tab={adminTab}
             setTab={setAdminTab}
             saveProducts={saveProducts}
             saveRates={saveRates}
             saveOrders={saveOrders}
             saveCardInfo={saveCardInfo}
+            saveCustomers={saveCustomers}
             onLogout={() => {
               setIsAdmin(false);
               setPage("home");
@@ -276,11 +355,14 @@ export default function AfganApp() {
   );
 }
 
-function Header({ onAdmin }) {
+function Header({ onAdmin, onCustomer }) {
   return (
     <header className="afgan-header">
       <button className="gear-btn" onClick={onAdmin} aria-label="مدیریت">
         ⚙
+      </button>
+      <button className="customer-btn" onClick={onCustomer} aria-label="ورود مشتری">
+        👤
       </button>
       <div className="brand">
         <div className="logo-mark">A</div>
@@ -518,9 +600,48 @@ function RemittanceForm({ onSubmit, onBack }) {
   );
 }
 
-function MyOrders({ orders, onBack }) {
+function OrderCard({ o }) {
+  return (
+    <div className="order-card" key={o.id}>
+      <div className="order-card-top">
+        <span>
+          {TYPE_ICONS[o.type]} {TYPE_LABELS[o.type]}
+        </span>
+        <span className={"status-badge status-" + o.status}>{STATUS_LABELS[o.status]}</span>
+      </div>
+      <div className="order-card-body">
+        <div>{o.item}</div>
+        <div className="order-card-price">
+          {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
+        </div>
+      </div>
+      <div className="order-card-track">
+        کد پیگیری: <b>{o.trackingCode}</b>
+      </div>
+      <div className="order-card-date">{fmtDate(o.date)}</div>
+    </div>
+  );
+}
+
+function MyOrders({ orders, currentCustomer, onBack }) {
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
+
+  if (currentCustomer) {
+    const myOrders = orders.filter((o) => o.customerId === currentCustomer.id);
+    return (
+      <div className="fade-in">
+        <PageHeader title="لیست سفارش" icon="📋" onBack={onBack} />
+        {myOrders.length === 0 && <div className="empty-state">هنوز سفارشی ثبت نکرده‌اید.</div>}
+        <div className="order-list">
+          {myOrders.map((o) => (
+            <OrderCard o={o} key={o.id} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const q = query.trim();
   const results = orders.filter((o) => {
     if (!q) return false;
@@ -542,20 +663,7 @@ function MyOrders({ orders, onBack }) {
       {searched && results.length === 0 && <div className="empty-state">سفارشی با این مشخصات یافت نشد.</div>}
       <div className="order-list">
         {results.map((o) => (
-          <div className="order-card" key={o.id}>
-            <div className="order-card-top">
-              <span>
-                {TYPE_ICONS[o.type]} {TYPE_LABELS[o.type]}
-              </span>
-              <span className={"status-badge status-" + o.status}>{STATUS_LABELS[o.status]}</span>
-            </div>
-            <div className="order-card-body">
-              <div>{o.item}</div>
-              <div className="order-card-price">{fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}</div>
-            </div>
-            <div className="order-card-track">کد پیگیری: <b>{o.trackingCode}</b></div>
-            <div className="order-card-date">{fmtDate(o.date)}</div>
-          </div>
+          <OrderCard o={o} key={o.id} />
         ))}
       </div>
     </div>
@@ -593,7 +701,124 @@ function AdminLogin({ onLogin, onBack }) {
   );
 }
 
-function AdminPanel({ products, rates, orders, cardInfo, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, onLogout, showToast }) {
+function CustomerLogin({ customers, onLogin, onBack, showToast }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    const found = (customers || []).find((c) => c.username === username.trim() && c.password === password);
+    if (found) {
+      onLogin(found);
+    } else {
+      showToast("نام کاربری یا رمز عبور اشتباه است");
+    }
+  }
+
+  return (
+    <div className="fade-in">
+      <PageHeader title="ورود مشتری" icon="👤" onBack={onBack} />
+      <form className="order-form" onSubmit={submit}>
+        <label>
+          نام کاربری
+          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="نام کاربری" />
+        </label>
+        <label>
+          رمز عبور
+          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="رمز عبور" type="password" />
+        </label>
+        <div className="form-btn-row">
+          <button type="submit" className="btn-primary full">
+            ورود
+          </button>
+        </div>
+        <div className="hint-text">اگه هنوز نام کاربری و رمز عبور نگرفتی، از مدیر بخواه برات بسازه.</div>
+      </form>
+    </div>
+  );
+}
+
+function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustomer, onLogout, onBack, showToast }) {
+  const [name, setName] = useState(customer.name || "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  function saveName() {
+    if (!name.trim()) {
+      showToast("نام نمی‌تواند خالی باشد");
+      return;
+    }
+    const next = customers.map((c) => (c.id === customer.id ? { ...c, name } : c));
+    saveCustomers(next);
+    setCurrentCustomer({ ...customer, name });
+    showToast("نام به‌روزرسانی شد");
+  }
+
+  function savePassword() {
+    if (!newPassword || newPassword.length < 4) {
+      showToast("رمز عبور باید حداقل ۴ کاراکتر باشد");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast("رمز عبور و تکرار آن یکسان نیستند");
+      return;
+    }
+    const next = customers.map((c) => (c.id === customer.id ? { ...c, password: newPassword } : c));
+    saveCustomers(next);
+    setCurrentCustomer({ ...customer, password: newPassword });
+    setNewPassword("");
+    setConfirmPassword("");
+    showToast("رمز عبور تغییر یافت");
+  }
+
+  const liveCustomer = (customers || []).find((c) => c.id === customer.id) || customer;
+
+  return (
+    <div className="fade-in">
+      <PageHeader title="حساب من" icon="👤" onBack={onBack} />
+
+      <div className="wallet-card">
+        <div className="wallet-label">موجودی کیف پول</div>
+        <div className="wallet-amount">{fmt(liveCustomer.wallet || 0)} تومان</div>
+      </div>
+
+      <div className="order-form" style={{ marginTop: 14 }}>
+        <label>
+          نام کاربری
+          <input value={customer.username} disabled />
+        </label>
+        <label>
+          نام نمایشی
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="نام شما" />
+        </label>
+        <button type="button" className="btn-primary full" onClick={saveName}>
+          ذخیره نام
+        </button>
+      </div>
+
+      <div className="order-form" style={{ marginTop: 14 }}>
+        <label>
+          رمز عبور جدید
+          <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" placeholder="رمز عبور جدید" />
+        </label>
+        <label>
+          تکرار رمز عبور جدید
+          <input value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} type="password" placeholder="تکرار رمز عبور" />
+        </label>
+        <button type="button" className="btn-primary full" onClick={savePassword}>
+          تغییر رمز عبور
+        </button>
+      </div>
+
+      <button type="button" className="btn-ghost full" style={{ marginTop: 14 }} onClick={onLogout}>
+        خروج از حساب
+      </button>
+    </div>
+  );
+}
+
+
+function AdminPanel({ products, rates, orders, cardInfo, customers, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, saveCustomers, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -609,6 +834,7 @@ function AdminPanel({ products, rates, orders, cardInfo, tab, setTab, saveProduc
           ["orders", "سفارش‌ها"],
           ["rates", "نرخ ارز"],
           ["card", "کارت / واتساپ"],
+          ["customers", "مشتریان"],
         ].map(([key, label]) => (
           <button key={key} className={"admin-tab" + (tab === key ? " active" : "")} onClick={() => setTab(key)}>
             {label}
@@ -620,6 +846,7 @@ function AdminPanel({ products, rates, orders, cardInfo, tab, setTab, saveProduc
       {tab === "orders" && <OrdersManager orders={orders} saveOrders={saveOrders} />}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
       {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
+      {tab === "customers" && <CustomersManager customers={customers} saveCustomers={saveCustomers} showToast={showToast} />}
     </div>
   );
 }
@@ -666,6 +893,105 @@ function CardManager({ cardInfo, saveCardInfo, showToast }) {
     </div>
   );
 }
+
+function CustomersManager({ customers, saveCustomers, showToast }) {
+  const [newCust, setNewCust] = useState({ username: "", password: "", name: "", wallet: "" });
+  const [editingWallet, setEditingWallet] = useState(null);
+  const [walletDraft, setWalletDraft] = useState("");
+
+  function addCustomer() {
+    if (!newCust.username.trim() || !newCust.password.trim()) {
+      showToast("نام کاربری و رمز عبور را وارد کنید");
+      return;
+    }
+    if ((customers || []).some((c) => c.username === newCust.username.trim())) {
+      showToast("این نام کاربری قبلاً استفاده شده");
+      return;
+    }
+    const item = {
+      id: newId("cust"),
+      username: newCust.username.trim(),
+      password: newCust.password,
+      name: newCust.name.trim() || newCust.username.trim(),
+      wallet: Number(newCust.wallet) || 0,
+      createdAt: new Date().toISOString(),
+    };
+    saveCustomers([...(customers || []), item]);
+    setNewCust({ username: "", password: "", name: "", wallet: "" });
+    showToast("مشتری ثبت شد");
+  }
+
+  function removeCustomer(c) {
+    saveCustomers(customers.filter((x) => x.id !== c.id));
+    showToast("مشتری حذف شد");
+  }
+
+  function startWalletEdit(c) {
+    setEditingWallet(c.id);
+    setWalletDraft(String(c.wallet || 0));
+  }
+  function saveWallet(c) {
+    saveCustomers(customers.map((x) => (x.id === c.id ? { ...x, wallet: Number(walletDraft) || 0 } : x)));
+    setEditingWallet(null);
+    showToast("کیف پول به‌روزرسانی شد");
+  }
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">
+        <span>👤 ثبت مشتری جدید</span>
+      </div>
+      <div className="add-form">
+        <input placeholder="نام کاربری" value={newCust.username} onChange={(e) => setNewCust((n) => ({ ...n, username: e.target.value }))} />
+        <input placeholder="رمز عبور" value={newCust.password} onChange={(e) => setNewCust((n) => ({ ...n, password: e.target.value }))} />
+        <input placeholder="نام نمایشی (اختیاری)" value={newCust.name} onChange={(e) => setNewCust((n) => ({ ...n, name: e.target.value }))} />
+        <input placeholder="موجودی اولیه" type="number" value={newCust.wallet} onChange={(e) => setNewCust((n) => ({ ...n, wallet: e.target.value }))} />
+        <button className="btn-primary small" onClick={addCustomer}>
+          ثبت مشتری
+        </button>
+      </div>
+
+      <div className="admin-section-title" style={{ marginTop: 18 }}>
+        <span>لیست مشتریان ثبت‌شده ({(customers || []).length})</span>
+      </div>
+      {(!customers || customers.length === 0) && <div className="empty-state">هنوز مشتری‌ای ثبت نشده است.</div>}
+      {(customers || []).map((c) => (
+        <div className="admin-product-row" key={c.id}>
+          <div className="product-info">
+            <div className="product-title">{c.name}</div>
+            <div className="product-subtitle">نام کاربری: {c.username}</div>
+          </div>
+          <div className="product-actions">
+            {editingWallet === c.id ? (
+              <>
+                <input
+                  type="number"
+                  value={walletDraft}
+                  onChange={(e) => setWalletDraft(e.target.value)}
+                  style={{ width: 90, padding: "8px 10px", borderRadius: 10, border: "1px solid #e2ddce" }}
+                />
+                <button className="btn-primary small" onClick={() => saveWallet(c)}>
+                  ذخیره
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="product-price">{fmt(c.wallet || 0)} تومان</div>
+                <button className="btn-ghost small" onClick={() => startWalletEdit(c)}>
+                  ویرایش کیف پول
+                </button>
+              </>
+            )}
+            <button className="btn-danger small" onClick={() => removeCustomer(c)}>
+              حذف
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 
 function Dashboard({ orders, products }) {
   const total = orders.length;
@@ -975,6 +1301,19 @@ function Style() {
         background: rgba(255,255,255,0.14); border: none; color: #fff;
         width: 36px; height: 36px; border-radius: 50%; font-size: 16px; cursor: pointer;
       }
+      .customer-btn {
+        position: absolute; left: 60px; top: 18px;
+        background: rgba(255,255,255,0.14); border: none; color: #fff;
+        width: 36px; height: 36px; border-radius: 50%; font-size: 16px; cursor: pointer;
+      }
+      .wallet-card {
+        background: linear-gradient(135deg, var(--accent) 0%, #a97a24 100%);
+        border-radius: 20px; padding: 20px; text-align: center; color: #1F2620;
+        box-shadow: 0 8px 20px rgba(201,151,58,0.3);
+      }
+      .wallet-label { font-size: 12px; opacity: 0.75; margin-bottom: 6px; }
+      .wallet-amount { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .btn-ghost.full { width: 100%; padding: 13px; font-size: 14px; border-radius: 14px; text-align: center; }
       .afgan-main { padding: 16px; flex: 1; }
       .fade-in { animation: fadeIn 0.25s ease; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
