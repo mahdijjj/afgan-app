@@ -61,6 +61,7 @@ export default function AfganApp() {
   const [orders, setOrders] = useState(null);
   const [cardInfo, setCardInfo] = useState(null);
   const [customers, setCustomers] = useState(null);
+  const [operators, setOperators] = useState(null);
   const [currentCustomer, setCurrentCustomer] = useState(null);
   const [lastOrder, setLastOrder] = useState(null);
   const [loaded, setLoaded] = useState(false);
@@ -71,6 +72,20 @@ export default function AfganApp() {
   useEffect(() => {
     init();
   }, []);
+
+  // Restore a logged-in customer's session (if any) once customers are loaded,
+  // so they stay logged in across page reloads until they explicitly log out.
+  useEffect(() => {
+    if (loaded && customers && !currentCustomer) {
+      try {
+        const savedId = localStorage.getItem("afgan_customer_id");
+        if (savedId) {
+          const found = customers.find((c) => c.id === savedId);
+          if (found) setCurrentCustomer(found);
+        }
+      } catch (e) {}
+    }
+  }, [loaded, customers]);
 
   // Periodically re-check jsonbin so changes made by the admin (or other customers)
   // show up for everyone without needing a manual refresh.
@@ -86,6 +101,7 @@ export default function AfganApp() {
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
           setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
           setCustomers((prev) => (JSON.stringify(prev) !== JSON.stringify(record.customers) ? record.customers : prev));
+          setOperators((prev) => (JSON.stringify(prev) !== JSON.stringify(record.operators) ? record.operators : prev));
         }
       } catch (e) {
         // network hiccup - just try again next interval
@@ -107,6 +123,7 @@ export default function AfganApp() {
     let orders = (record && record.orders) || [];
     let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
     let customers = (record && record.customers) || [];
+    let operators = (record && record.operators) || [];
     let needsSeed = false;
 
     if (!products.length) {
@@ -123,13 +140,16 @@ export default function AfganApp() {
     if (!record || !record.customers) {
       needsSeed = true;
     }
+    if (!record || !record.operators) {
+      needsSeed = true;
+    }
 
     if (needsSeed) {
       try {
         await fetch(JSONBIN_URL, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-          body: JSON.stringify({ products, rates, orders, cardInfo, customers }),
+          body: JSON.stringify({ products, rates, orders, cardInfo, customers, operators }),
         });
       } catch (e) {}
     }
@@ -139,6 +159,7 @@ export default function AfganApp() {
     setOrders(orders);
     setCardInfo(cardInfo);
     setCustomers(customers);
+    setOperators(operators);
     setLoaded(true);
   }
 
@@ -154,23 +175,27 @@ export default function AfganApp() {
 
   async function saveProducts(next) {
     setProducts(next);
-    persist({ products: next, rates, orders, cardInfo, customers });
+    persist({ products: next, rates, orders, cardInfo, customers, operators });
   }
   async function saveRates(next) {
     setRates(next);
-    persist({ products, rates: next, orders, cardInfo, customers });
+    persist({ products, rates: next, orders, cardInfo, customers, operators });
   }
   async function saveOrders(next) {
     setOrders(next);
-    persist({ products, rates, orders: next, cardInfo, customers });
+    persist({ products, rates, orders: next, cardInfo, customers, operators });
   }
   async function saveCardInfo(next) {
     setCardInfo(next);
-    persist({ products, rates, orders, cardInfo: next, customers });
+    persist({ products, rates, orders, cardInfo: next, customers, operators });
   }
   async function saveCustomers(next) {
     setCustomers(next);
-    persist({ products, rates, orders, cardInfo, customers: next });
+    persist({ products, rates, orders, cardInfo, customers: next, operators });
+  }
+  async function saveOperators(next) {
+    setOperators(next);
+    persist({ products, rates, orders, cardInfo, customers, operators: next });
   }
 
   function showToast(msg) {
@@ -213,11 +238,13 @@ export default function AfganApp() {
       <Style />
       <Header onAdmin={() => setPage(isAdmin ? "admin" : "adminLogin")} onCustomer={() => setPage(currentCustomer ? "customerProfile" : "customerLogin")} />
       <main className="afgan-main">
-        {page === "home" && <Home rates={rates} cardInfo={cardInfo} setPage={setPage} />}
+        {page === "home" && <Home rates={rates} cardInfo={cardInfo} currentCustomer={currentCustomer} setPage={setPage} />}
         {page === "internet" && (
-          <ProductList
+          <CategoryShop
             title="بسته اینترنت"
             icon="📶"
+            category="internet"
+            operators={operators || []}
             products={products.filter((p) => p.category === "internet" && p.active)}
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
@@ -243,9 +270,11 @@ export default function AfganApp() {
           />
         )}
         {page === "credit" && (
-          <ProductList
+          <CategoryShop
             title="شارژ تماس"
             icon="📞"
+            category="credit"
+            operators={operators || []}
             products={products.filter((p) => p.category === "credit" && p.active)}
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
@@ -319,7 +348,10 @@ export default function AfganApp() {
             customers={customers}
             onLogin={(customer) => {
               setCurrentCustomer(customer);
-              setPage("customerProfile");
+              try {
+                localStorage.setItem("afgan_customer_id", customer.id);
+              } catch (e) {}
+              setPage("home");
             }}
             onBack={() => setPage("home")}
             showToast={showToast}
@@ -333,6 +365,9 @@ export default function AfganApp() {
             setCurrentCustomer={setCurrentCustomer}
             onLogout={() => {
               setCurrentCustomer(null);
+              try {
+                localStorage.removeItem("afgan_customer_id");
+              } catch (e) {}
               setPage("home");
             }}
             onBack={() => setPage("home")}
@@ -346,6 +381,7 @@ export default function AfganApp() {
             orders={orders}
             cardInfo={cardInfo}
             customers={customers}
+            operators={operators}
             tab={adminTab}
             setTab={setAdminTab}
             saveProducts={saveProducts}
@@ -353,6 +389,7 @@ export default function AfganApp() {
             saveOrders={saveOrders}
             saveCardInfo={saveCardInfo}
             saveCustomers={saveCustomers}
+            saveOperators={saveOperators}
             onLogout={() => {
               setIsAdmin(false);
               setPage("home");
@@ -400,10 +437,16 @@ function PageHeader({ title, icon, onBack }) {
   );
 }
 
-function Home({ rates, cardInfo, setPage }) {
+function Home({ rates, cardInfo, currentCustomer, setPage }) {
   return (
     <div className="fade-in">
       <RateBoard rates={rates} />
+      {currentCustomer && (
+        <div className="wallet-card" style={{ marginBottom: 18 }}>
+          <div className="wallet-label">موجودی کیف پول شما</div>
+          <div className="wallet-amount">{fmt(currentCustomer.wallet || 0)} تومان</div>
+        </div>
+      )}
       <div className="card-grid">
         <ServiceCard icon="📶" title="بسته اینترنت" desc="خرید بسته‌های اینترنت با بهترین قیمت" onClick={() => setPage("internet")} />
         <ServiceCard icon="📞" title="شارژ تماس" desc="شارژ آنی تلفن همراه شما" onClick={() => setPage("credit")} />
@@ -558,6 +601,56 @@ function ProductList({ title, icon, products, isLoggedIn, onRequireLogin, onOrde
     </div>
   );
 }
+
+function CategoryShop({ title, icon, category, operators, products, isLoggedIn, onRequireLogin, onOrder, onBack }) {
+  const [selectedOp, setSelectedOp] = useState(null);
+  const catOperators = (operators || []).filter((o) => o.category === category);
+
+  // No operators defined yet for this category - fall back to the flat product list.
+  if (catOperators.length === 0) {
+    return (
+      <ProductList
+        title={title}
+        icon={icon}
+        products={products}
+        isLoggedIn={isLoggedIn}
+        onRequireLogin={onRequireLogin}
+        onOrder={onOrder}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (!selectedOp) {
+    return (
+      <div className="fade-in">
+        <PageHeader title={title} icon={icon} onBack={onBack} />
+        <div className="card-grid">
+          {catOperators.map((op) => (
+            <button key={op.id} className="service-card" onClick={() => setSelectedOp(op)}>
+              <div className="service-icon">📡</div>
+              <div className="service-title">{op.name}</div>
+              <div className="service-desc">مشاهده بسته‌های {op.name}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ProductList
+      title={selectedOp.name}
+      icon={icon}
+      products={products.filter((p) => p.operatorId === selectedOp.id)}
+      isLoggedIn={isLoggedIn}
+      onRequireLogin={onRequireLogin}
+      onOrder={onOrder}
+      onBack={() => setSelectedOp(null)}
+    />
+  );
+}
+
 
 function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack }) {
   const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
@@ -790,16 +883,9 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
     showToast("رمز عبور تغییر یافت");
   }
 
-  const liveCustomer = (customers || []).find((c) => c.id === customer.id) || customer;
-
   return (
     <div className="fade-in">
       <PageHeader title="حساب من" icon="👤" onBack={onBack} />
-
-      <div className="wallet-card">
-        <div className="wallet-label">موجودی کیف پول</div>
-        <div className="wallet-amount">{fmt(liveCustomer.wallet || 0)} تومان</div>
-      </div>
 
       <div className="order-form" style={{ marginTop: 14 }}>
         <label>
@@ -837,7 +923,7 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
 }
 
 
-function AdminPanel({ products, rates, orders, cardInfo, customers, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, saveCustomers, onLogout, showToast }) {
+function AdminPanel({ products, rates, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -861,7 +947,9 @@ function AdminPanel({ products, rates, orders, cardInfo, customers, tab, setTab,
         ))}
       </div>
       {tab === "dashboard" && <Dashboard orders={orders} products={products} />}
-      {tab === "products" && <ProductsManager products={products} saveProducts={saveProducts} showToast={showToast} />}
+      {tab === "products" && (
+        <ProductsManager products={products} operators={operators} saveProducts={saveProducts} saveOperators={saveOperators} showToast={showToast} />
+      )}
       {tab === "orders" && <OrdersManager orders={orders} saveOrders={saveOrders} />}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
       {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
@@ -1045,21 +1133,100 @@ function Dashboard({ orders, products }) {
   );
 }
 
-function ProductsManager({ products, saveProducts, showToast }) {
+function ProductsManager({ products, operators, saveProducts, saveOperators, showToast }) {
+  return (
+    <div>
+      <CategorySection
+        category="internet"
+        label="📶 بسته‌های اینترنت"
+        products={products}
+        operators={operators}
+        saveProducts={saveProducts}
+        saveOperators={saveOperators}
+        showToast={showToast}
+      />
+      <CategorySection
+        category="credit"
+        label="📞 شارژ تماس"
+        products={products}
+        operators={operators}
+        saveProducts={saveProducts}
+        saveOperators={saveOperators}
+        showToast={showToast}
+      />
+    </div>
+  );
+}
+
+function CategorySection({ category, label, products, operators, saveProducts, saveOperators, showToast }) {
+  const [newOpName, setNewOpName] = useState("");
+  const catOperators = (operators || []).filter((o) => o.category === category);
+  const ungrouped = products.filter((p) => p.category === category && !p.operatorId);
+
+  function addOperator() {
+    if (!newOpName.trim()) {
+      showToast("نام اپراتور را وارد کنید");
+      return;
+    }
+    const item = { id: newId("op"), category, name: newOpName.trim() };
+    saveOperators([...(operators || []), item]);
+    setNewOpName("");
+    showToast("اپراتور اضافه شد");
+  }
+
+  function removeOperator(op) {
+    saveOperators((operators || []).filter((o) => o.id !== op.id));
+    // detach this operator's products instead of deleting them, so nothing is lost
+    saveProducts(products.map((p) => (p.operatorId === op.id ? { ...p, operatorId: null } : p)));
+    showToast("اپراتور حذف شد");
+  }
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">
+        <span>{label}</span>
+      </div>
+      <div className="add-form">
+        <input placeholder="نام اپراتور جدید (مثلاً روشان)" value={newOpName} onChange={(e) => setNewOpName(e.target.value)} />
+        <button className="btn-primary small" onClick={addOperator}>
+          + افزودن اپراتور
+        </button>
+      </div>
+      {catOperators.map((op) => (
+        <OperatorProducts
+          key={op.id}
+          operator={op}
+          category={category}
+          products={products}
+          saveProducts={saveProducts}
+          onRemoveOperator={() => removeOperator(op)}
+          showToast={showToast}
+        />
+      ))}
+      {ungrouped.length > 0 && <OperatorProducts operator={null} category={category} products={products} saveProducts={saveProducts} showToast={showToast} />}
+    </div>
+  );
+}
+
+function OperatorProducts({ operator, category, products, saveProducts, onRemoveOperator, showToast }) {
+  const [open, setOpen] = useState(true);
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
-  const [adding, setAdding] = useState(null); // 'internet' | 'credit' | null
+  const [adding, setAdding] = useState(false);
   const [newProd, setNewProd] = useState({ title: "", subtitle: "", price: "", currency: "TOMAN" });
+
+  const list = products.filter((p) => p.category === category && (operator ? p.operatorId === operator.id : !p.operatorId));
 
   function startEdit(p) {
     setEditing(p.id);
     setDraft({ title: p.title, subtitle: p.subtitle, price: p.price, currency: p.currency || "TOMAN" });
   }
   function saveEdit(p) {
-    const next = products.map((x) =>
-      x.id === p.id ? { ...x, title: draft.title, subtitle: draft.subtitle, price: Number(draft.price) || 0, currency: draft.currency || "TOMAN" } : x
+    saveProducts(
+      products.map((x) =>
+        x.id === p.id ? { ...x, title: draft.title, subtitle: draft.subtitle, price: Number(draft.price) || 0, currency: draft.currency || "TOMAN" } : x
+      )
     );
-    saveProducts(next);
     setEditing(null);
     showToast("محصول به‌روزرسانی شد");
   }
@@ -1070,7 +1237,7 @@ function ProductsManager({ products, saveProducts, showToast }) {
     saveProducts(products.filter((x) => x.id !== p.id));
     showToast("محصول حذف شد");
   }
-  function addProduct(category) {
+  function addProduct() {
     if (!newProd.title.trim() || !newProd.price) {
       showToast("عنوان و قیمت را وارد کنید");
       return;
@@ -1078,6 +1245,7 @@ function ProductsManager({ products, saveProducts, showToast }) {
     const item = {
       id: newId(category),
       category,
+      operatorId: operator ? operator.id : null,
       title: newProd.title,
       subtitle: newProd.subtitle,
       price: Number(newProd.price) || 0,
@@ -1086,92 +1254,107 @@ function ProductsManager({ products, saveProducts, showToast }) {
     };
     saveProducts([...products, item]);
     setNewProd({ title: "", subtitle: "", price: "", currency: "TOMAN" });
-    setAdding(null);
+    setAdding(false);
     showToast("محصول اضافه شد");
   }
 
-  function Section({ category, label }) {
-    const list = products.filter((p) => p.category === category);
-    return (
-      <div className="admin-section">
-        <div className="admin-section-title">
-          <span>{label}</span>
-          <button className="btn-ghost small" onClick={() => setAdding(adding === category ? null : category)}>
-            {adding === category ? "بستن" : "+ افزودن محصول"}
-          </button>
-        </div>
-        {adding === category && (
-          <div className="add-form">
-            <input placeholder="عنوان" value={newProd.title} onChange={(e) => setNewProd((n) => ({ ...n, title: e.target.value }))} />
-            <input placeholder="زیرعنوان" value={newProd.subtitle} onChange={(e) => setNewProd((n) => ({ ...n, subtitle: e.target.value }))} />
-            <input placeholder="قیمت" type="number" value={newProd.price} onChange={(e) => setNewProd((n) => ({ ...n, price: e.target.value }))} />
-            <select value={newProd.currency} onChange={(e) => setNewProd((n) => ({ ...n, currency: e.target.value }))}>
-              {CURRENCY_OPTIONS.map((c) => (
-                <option key={c} value={c}>
-                  {CURRENCY_LABELS[c]}
-                </option>
-              ))}
-            </select>
-            <button className="btn-primary small" onClick={() => addProduct(category)}>
-              ذخیره
+  return (
+    <div className="operator-block">
+      <div className="operator-block-header" onClick={() => setOpen(!open)}>
+        <span>{operator ? "📡 " + operator.name : "سایر محصولات (بدون اپراتور)"}</span>
+        <span>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div className="operator-block-body">
+          <div className="admin-section-title">
+            <button
+              className="btn-ghost small"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAdding(!adding);
+              }}
+            >
+              {adding ? "بستن" : "+ افزودن محصول"}
             </button>
-          </div>
-        )}
-        {list.map((p) => (
-          <div className="admin-product-row" key={p.id}>
-            {editing === p.id ? (
-              <div className="add-form">
-                <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
-                <input value={draft.subtitle} onChange={(e) => setDraft((d) => ({ ...d, subtitle: e.target.value }))} />
-                <input type="number" value={draft.price} onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))} />
-                <select value={draft.currency} onChange={(e) => setDraft((d) => ({ ...d, currency: e.target.value }))}>
-                  {CURRENCY_OPTIONS.map((c) => (
-                    <option key={c} value={c}>
-                      {CURRENCY_LABELS[c]}
-                    </option>
-                  ))}
-                </select>
-                <button className="btn-primary small" onClick={() => saveEdit(p)}>
-                  ذخیره
-                </button>
-                <button className="btn-ghost small" onClick={() => setEditing(null)}>
-                  انصراف
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="product-info">
-                  <div className="product-title">
-                    {p.title} {!p.active && <span className="inactive-tag">غیرفعال</span>}
-                  </div>
-                  <div className="product-subtitle">{p.subtitle}</div>
-                </div>
-                <div className="product-actions">
-                  <div className="product-price">
-                    {fmt(p.price)} {CURRENCY_LABELS[p.currency || "TOMAN"]}
-                  </div>
-                  <button className="btn-ghost small" onClick={() => startEdit(p)}>
-                    ویرایش
-                  </button>
-                  <button className="btn-ghost small" onClick={() => toggleActive(p)}>
-                    {p.active ? "غیرفعال کردن" : "فعال کردن"}
-                  </button>
-                  <button className="btn-danger small" onClick={() => remove(p)}>
-                    حذف
-                  </button>
-                </div>
-              </>
+            {operator && (
+              <button
+                className="btn-danger small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemoveOperator();
+                }}
+              >
+                حذف اپراتور
+              </button>
             )}
           </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <Section category="internet" label="📶 بسته‌های اینترنت" />
-      <Section category="credit" label="📞 شارژ تماس" />
+          {adding && (
+            <div className="add-form">
+              <input placeholder="عنوان" value={newProd.title} onChange={(e) => setNewProd((n) => ({ ...n, title: e.target.value }))} />
+              <input placeholder="زیرعنوان" value={newProd.subtitle} onChange={(e) => setNewProd((n) => ({ ...n, subtitle: e.target.value }))} />
+              <input placeholder="قیمت" type="number" value={newProd.price} onChange={(e) => setNewProd((n) => ({ ...n, price: e.target.value }))} />
+              <select value={newProd.currency} onChange={(e) => setNewProd((n) => ({ ...n, currency: e.target.value }))}>
+                {CURRENCY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {CURRENCY_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+              <button className="btn-primary small" onClick={addProduct}>
+                ذخیره
+              </button>
+            </div>
+          )}
+          {list.length === 0 && <div className="empty-state">محصولی ثبت نشده است.</div>}
+          {list.map((p) => (
+            <div className="admin-product-row" key={p.id}>
+              {editing === p.id ? (
+                <div className="add-form">
+                  <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
+                  <input value={draft.subtitle} onChange={(e) => setDraft((d) => ({ ...d, subtitle: e.target.value }))} />
+                  <input type="number" value={draft.price} onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))} />
+                  <select value={draft.currency} onChange={(e) => setDraft((d) => ({ ...d, currency: e.target.value }))}>
+                    {CURRENCY_OPTIONS.map((c) => (
+                      <option key={c} value={c}>
+                        {CURRENCY_LABELS[c]}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="btn-primary small" onClick={() => saveEdit(p)}>
+                    ذخیره
+                  </button>
+                  <button className="btn-ghost small" onClick={() => setEditing(null)}>
+                    انصراف
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="product-info">
+                    <div className="product-title">
+                      {p.title} {!p.active && <span className="inactive-tag">غیرفعال</span>}
+                    </div>
+                    <div className="product-subtitle">{p.subtitle}</div>
+                  </div>
+                  <div className="product-actions">
+                    <div className="product-price">
+                      {fmt(p.price)} {CURRENCY_LABELS[p.currency || "TOMAN"]}
+                    </div>
+                    <button className="btn-ghost small" onClick={() => startEdit(p)}>
+                      ویرایش
+                    </button>
+                    <button className="btn-ghost small" onClick={() => toggleActive(p)}>
+                      {p.active ? "غیرفعال کردن" : "فعال کردن"}
+                    </button>
+                    <button className="btn-danger small" onClick={() => remove(p)}>
+                      حذف
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1180,6 +1363,9 @@ function OrdersManager({ orders, saveOrders }) {
   const [expanded, setExpanded] = useState(null);
   function setStatus(o, status) {
     saveOrders(orders.map((x) => (x.id === o.id ? { ...x, status } : x)));
+  }
+  function removeOrder(o) {
+    saveOrders(orders.filter((x) => x.id !== o.id));
   }
   return (
     <div className="admin-section">
@@ -1190,7 +1376,9 @@ function OrdersManager({ orders, saveOrders }) {
             <span>
               {TYPE_ICONS[o.type]} {o.customerName || "—"}
             </span>
-            <span className="order-card-price">{fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}</span>
+            <span className="order-card-price">
+              {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
+            </span>
           </div>
           <div className="admin-order-meta">
             <span>{o.phone}</span>
@@ -1211,6 +1399,9 @@ function OrdersManager({ orders, saveOrders }) {
                 {STATUS_LABELS[s]}
               </button>
             ))}
+            <button className="btn-danger small" onClick={() => removeOrder(o)}>
+              حذف سفارش
+            </button>
           </div>
         </div>
       ))}
@@ -1225,6 +1416,10 @@ function RatesManager({ rates, saveRates, showToast }) {
   function save(code) {
     saveRates(rates.map((r) => (r.code === code ? { ...r, value: Number(drafts[code]) || 0 } : r)));
     showToast("نرخ به‌روزرسانی شد");
+  }
+  function removeRate(code) {
+    saveRates(rates.filter((r) => r.code !== code));
+    showToast("ارز حذف شد");
   }
   function addRate() {
     if (!newRate.code.trim() || !newRate.label.trim() || !newRate.value) {
@@ -1250,6 +1445,9 @@ function RatesManager({ rates, saveRates, showToast }) {
           />
           <button className="btn-primary small" onClick={() => save(r.code)}>
             ذخیره
+          </button>
+          <button className="btn-danger small" onClick={() => removeRate(r.code)}>
+            حذف
           </button>
         </div>
       ))}
@@ -1431,6 +1629,9 @@ function Style() {
 
       .admin-section { margin-bottom: 22px; }
       .admin-section-title { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 10px; font-size: 14px; }
+      .operator-block { background: #FBFAF6; border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #eee5d0; }
+      .operator-block-header { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; cursor: pointer; padding: 4px 0; }
+      .operator-block-body { margin-top: 8px; }
       .add-form { display: flex; flex-wrap: wrap; gap: 8px; background: #FBFAF6; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
       .add-form input { flex: 1; min-width: 90px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2ddce; font-family: inherit; font-size: 13px; }
 
