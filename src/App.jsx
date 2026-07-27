@@ -54,30 +54,6 @@ function genTrackingCode() {
   return "AF" + Math.floor(100000 + Math.random() * 900000);
 }
 
-// Resize + compress an uploaded receipt image in the browser before storing it,
-// so it stays small enough to fit comfortably inside the shared jsonbin record.
-function compressImageFile(file, maxWidth = 700, quality = 0.55) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("read failed"));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("image load failed"));
-      img.onload = () => {
-        const scale = Math.min(1, maxWidth / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 export default function AfganApp() {
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState(null);
@@ -415,51 +391,10 @@ function ServiceCard({ icon, title, desc, onClick }) {
   );
 }
 
-function ReceiptUploader({ receipt, setReceipt }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function handleFile(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    setErr("");
-    setBusy(true);
-    try {
-      const dataUrl = await compressImageFile(file);
-      setReceipt(dataUrl);
-    } catch (e2) {
-      setErr("بارگذاری عکس ناموفق بود، دوباره امتحان کنید");
-    }
-    setBusy(false);
-  }
-
-  return (
-    <div className="receipt-uploader">
-      <div className="receipt-label">فیش واریزی (اختیاری)</div>
-      {!receipt && (
-        <label className="receipt-btn">
-          {busy ? "در حال پردازش..." : "📎 انتخاب عکس فیش"}
-          <input type="file" accept="image/*" onChange={handleFile} hidden disabled={busy} />
-        </label>
-      )}
-      {receipt && (
-        <div className="receipt-preview">
-          <img src={receipt} alt="فیش واریزی" />
-          <button type="button" className="btn-ghost small" onClick={() => setReceipt(null)}>
-            حذف عکس
-          </button>
-        </div>
-      )}
-      {err && <div className="form-error">{err}</div>}
-    </div>
-  );
-}
-
 function ProductList({ title, icon, products, onOrder, onBack }) {
   const [selected, setSelected] = useState(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
 
   function submit(e) {
@@ -468,7 +403,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
       setError("لطفاً نام و شماره تماس را وارد کنید");
       return;
     }
-    onOrder(selected, { name, phone, receipt });
+    onOrder(selected, { name, phone });
   }
 
   return (
@@ -512,7 +447,6 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
             شماره موبایل
             <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XXXXXXXX" type="tel" />
           </label>
-          <ReceiptUploader receipt={receipt} setReceipt={setReceipt} />
           {error && <div className="form-error">{error}</div>}
           <div className="form-btn-row">
             <button type="button" className="btn-ghost" onClick={() => setSelected(null)}>
@@ -530,7 +464,6 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
 
 function RemittanceForm({ onSubmit, onBack }) {
   const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
-  const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
 
   function set(k, v) {
@@ -543,7 +476,7 @@ function RemittanceForm({ onSubmit, onBack }) {
       setError("لطفاً همه فیلدهای ضروری را تکمیل کنید");
       return;
     }
-    onSubmit({ ...form, receipt });
+    onSubmit(form);
   }
 
   return (
