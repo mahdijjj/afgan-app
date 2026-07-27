@@ -586,20 +586,27 @@ function RemittanceForm({ onSubmit, onBack }) {
 }
 
 function MyOrders({ orders, onBack }) {
-  const [phone, setPhone] = useState("");
+  const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
-  const results = orders.filter((o) => o.phone && phone && o.phone.includes(phone.trim()));
+  const q = query.trim();
+  const results = orders.filter((o) => {
+    if (!q) return false;
+    const matchPhone = o.phone && o.phone.trim() === q;
+    const matchCode = o.trackingCode && o.trackingCode.toLowerCase() === q.toLowerCase();
+    return matchPhone || matchCode;
+  });
 
   return (
     <div className="fade-in">
       <PageHeader title="لیست سفارش" icon="📋" onBack={onBack} />
+      <div className="search-label">شماره موبایلی که با آن سفارش دادید یا کد پیگیری را وارد کنید</div>
       <div className="search-row">
-        <input placeholder="شماره موبایل خود را وارد کنید" value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" />
+        <input placeholder="شماره موبایل" value={query} onChange={(e) => setQuery(e.target.value)} />
         <button className="btn-primary small" onClick={() => setSearched(true)}>
           جستجو
         </button>
       </div>
-      {searched && results.length === 0 && <div className="empty-state">سفارشی با این شماره یافت نشد.</div>}
+      {searched && results.length === 0 && <div className="empty-state">سفارشی با این مشخصات یافت نشد.</div>}
       <div className="order-list">
         {results.map((o) => (
           <div className="order-card" key={o.id}>
@@ -1105,6 +1112,7 @@ function Style() {
       .form-btn-row { display: flex; gap: 10px; }
       .hint-text { font-size: 11px; color: var(--ink-soft); text-align: center; }
 
+      .search-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 8px; line-height: 1.6; }
       .search-row { display: flex; gap: 8px; margin-bottom: 14px; }
       .search-row input { flex: 1; padding: 11px 12px; border-radius: 12px; border: 1px solid #e2ddce; font-family: inherit; }
       .order-list { display: flex; flex-direction: column; gap: 10px; }
