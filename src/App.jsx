@@ -29,7 +29,15 @@ const DEFAULT_RATES = [
   { code: "EUR", label: "یورو", value: 65000 },
   { code: "AED", label: "درهم امارات", value: 16300 },
   { code: "PKR", label: "کلدار پاکستان", value: 210 },
+  { code: "AFN", label: "افغانی (نرخ حواله)", value: 0.345 },
 ];
+
+// مبلغ افغانی حواله را با نرخ روز افغانی به تومان تبدیل می‌کند و رقم اعشار را حذف می‌کند.
+function afnToToman(amountAfn, afnRateValue) {
+  const rate = Number(afnRateValue) || 0;
+  if (rate <= 0) return 0;
+  return Math.floor((Number(amountAfn) || 0) / rate * 1000);
+}
 
 const STATUS_LABELS = { pending: "در انتظار", processing: "در حال انجام", completed: "تکمیل شده", cancelled: "لغو شده" };
 const STATUS_ORDER = ["pending", "processing", "completed", "cancelled"];
@@ -52,6 +60,14 @@ function fmtDate(iso) {
 }
 function genTrackingCode() {
   return "AF" + Math.floor(100000 + Math.random() * 900000);
+}
+// شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
+// و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
+function normalizeWhatsApp(number) {
+  let digits = String(number || "").replace(/[^0-9]/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("0")) digits = "93" + digits.slice(1);
+  return digits;
 }
 
 export default function AfganApp() {
@@ -258,7 +274,7 @@ export default function AfganApp() {
                 item: item.title,
                 price: item.price,
                 currency: item.currency || "TOMAN",
-                customerName: form.name,
+                customerName: currentCustomer ? currentCustomer.name : "",
                 phone: form.phone,
                 customerId: currentCustomer ? currentCustomer.id : undefined,
               });
@@ -288,7 +304,7 @@ export default function AfganApp() {
                 item: item.title,
                 price: item.price,
                 currency: item.currency || "TOMAN",
-                customerName: form.name,
+                customerName: currentCustomer ? currentCustomer.name : "",
                 phone: form.phone,
                 customerId: currentCustomer ? currentCustomer.id : undefined,
               });
@@ -303,17 +319,26 @@ export default function AfganApp() {
           <RemittanceForm
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
+            afnRate={((rates || []).find((r) => r.code === "AFN") || {}).value}
             onSubmit={(form) => {
-              const amount = Number(form.amount) || 0;
-              if (currentCustomer && (currentCustomer.wallet || 0) < amount) {
+              const amountAfn = Number(form.amount) || 0;
+              const afnRateValue = ((rates || []).find((r) => r.code === "AFN") || {}).value;
+              const tomanAmount = afnToToman(amountAfn, afnRateValue);
+              if (!tomanAmount) {
+                showToast("نرخ روز افغانی هنوز توسط مدیریت ثبت نشده است");
+                return;
+              }
+              if (currentCustomer && (currentCustomer.wallet || 0) < tomanAmount) {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
               const full = placeOrder({
                 type: "remittance",
                 item: "حواله ارزی",
-                price: amount,
+                price: amountAfn,
                 currency: "AFN",
+                tomanAmount,
+                afnRateUsed: Number(afnRateValue) || 0,
                 customerName: form.senderName,
                 phone: form.phone,
                 receiverName: form.receiverName,
@@ -321,7 +346,7 @@ export default function AfganApp() {
                 notes: form.notes,
                 customerId: currentCustomer ? currentCustomer.id : undefined,
               });
-              if (currentCustomer) deductWallet(full.price);
+              if (currentCustomer) deductWallet(tomanAmount);
               setLastOrder(full);
               setPage("confirm");
             }}
@@ -471,9 +496,9 @@ function PaymentCard({ cardInfo }) {
 }
 
 function WhatsAppButton({ number }) {
-  const clean = String(number).replace(/[^0-9+]/g, "");
+  const clean = normalizeWhatsApp(number);
   return (
-    <a className="whatsapp-btn" href={"https://wa.me/" + clean.replace("+", "")} target="_blank" rel="noreferrer">
+    <a className="whatsapp-btn" href={"https://wa.me/" + clean} target="_blank" rel="noreferrer">
       <span className="whatsapp-icon">💬</span>
       ارتباط با ما در واتساپ
     </a>
@@ -529,17 +554,16 @@ function ServiceCard({ icon, title, desc, onClick }) {
 
 function ProductList({ title, icon, products, isLoggedIn, onRequireLogin, onOrder, onBack }) {
   const [selected, setSelected] = useState(null);
-  const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
 
   function submit(e) {
     e.preventDefault();
-    if (!name.trim() || !phone.trim()) {
-      setError("لطفاً نام و شماره تماس را وارد کنید");
+    if (!phone.trim()) {
+      setError("لطفاً شماره تماس را وارد کنید");
       return;
     }
-    onOrder(selected, { name, phone });
+    onOrder(selected, { phone });
   }
 
   return (
@@ -579,10 +603,6 @@ function ProductList({ title, icon, products, isLoggedIn, onRequireLogin, onOrde
           <div className="order-form-summary">
             سفارش: <b>{selected.title}</b> — {fmt(selected.price)} {CURRENCY_LABELS[selected.currency || "TOMAN"]}
           </div>
-          <label>
-            نام مشتری
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="نام کامل" />
-          </label>
           <label>
             شماره موبایل
             <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XXXXXXXX" type="tel" />
@@ -652,9 +672,10 @@ function CategoryShop({ title, icon, category, operators, products, isLoggedIn, 
 }
 
 
-function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack }) {
+function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack, afnRate }) {
   const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
   const [error, setError] = useState("");
+  const tomanPreview = afnToToman(form.amount, afnRate);
 
   function set(k, v) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -689,6 +710,13 @@ function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack }) {
           مبلغ
           <input value={form.amount} onChange={(e) => set("amount", e.target.value)} placeholder="مبلغ به افغانی" type="number" />
         </label>
+        {form.amount && (
+          <div className="order-form-summary">
+            {tomanPreview
+              ? <>معادل تقریبی: <b>{fmt(tomanPreview)}</b> تومان از کیف پول شما کسر می‌شود</>
+              : "نرخ روز افغانی هنوز ثبت نشده — لطفاً با پشتیبانی تماس بگیرید"}
+          </div>
+        )}
         <label>
           نام گیرنده
           <input value={form.receiverName} onChange={(e) => set("receiverName", e.target.value)} placeholder="نام گیرنده" />
@@ -727,6 +755,9 @@ function OrderCard({ o }) {
           {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
         </div>
       </div>
+      {o.type === "remittance" && !!o.tomanAmount && (
+        <div className="order-card-track">مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان</div>
+      )}
       <div className="order-card-track">
         کد پیگیری: <b>{o.trackingCode}</b>
       </div>
@@ -1390,6 +1421,7 @@ function OrdersManager({ orders, saveOrders }) {
             <div className="admin-order-detail">
               <div>گیرنده: {o.receiverName}</div>
               <div>مقصد: {o.destination}</div>
+              {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
               {o.notes && <div>توضیحات: {o.notes}</div>}
             </div>
           )}
