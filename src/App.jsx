@@ -11,15 +11,18 @@ const POLL_INTERVAL_MS = 20000; // how often the app re-checks jsonbin for chang
 // ==============================
 
 const DEFAULT_PRODUCTS = [
-  { id: "i1", category: "internet", title: "۱ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 150, active: true },
-  { id: "i2", category: "internet", title: "۲ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 280, active: true },
-  { id: "i3", category: "internet", title: "۵ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 600, active: true },
-  { id: "i4", category: "internet", title: "۱۰ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 1100, active: true },
-  { id: "c1", category: "credit", title: "۱۰۰ افغانی", subtitle: "شارژ مستقیم", price: 100, active: true },
-  { id: "c2", category: "credit", title: "۲۰۰ افغانی", subtitle: "شارژ مستقیم", price: 200, active: true },
-  { id: "c3", category: "credit", title: "۵۰۰ افغانی", subtitle: "شارژ مستقیم", price: 500, active: true },
-  { id: "c4", category: "credit", title: "۱۰۰۰ افغانی", subtitle: "شارژ مستقیم", price: 1000, active: true },
+  { id: "i1", category: "internet", title: "۱ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 150, currency: "TOMAN", active: true },
+  { id: "i2", category: "internet", title: "۲ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 280, currency: "TOMAN", active: true },
+  { id: "i3", category: "internet", title: "۵ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 600, currency: "TOMAN", active: true },
+  { id: "i4", category: "internet", title: "۱۰ گیگابایت", subtitle: "اعتبار ۳۰ روز", price: 1100, currency: "TOMAN", active: true },
+  { id: "c1", category: "credit", title: "۱۰۰ افغانی", subtitle: "شارژ مستقیم", price: 100, currency: "TOMAN", active: true },
+  { id: "c2", category: "credit", title: "۲۰۰ افغانی", subtitle: "شارژ مستقیم", price: 200, currency: "TOMAN", active: true },
+  { id: "c3", category: "credit", title: "۵۰۰ افغانی", subtitle: "شارژ مستقیم", price: 500, currency: "TOMAN", active: true },
+  { id: "c4", category: "credit", title: "۱۰۰۰ افغانی", subtitle: "شارژ مستقیم", price: 1000, currency: "TOMAN", active: true },
 ];
+
+const CURRENCY_LABELS = { AFN: "افغانی", TOMAN: "تومان", USD: "دالر" };
+const CURRENCY_OPTIONS = ["TOMAN", "AFN", "USD"];
 
 const DEFAULT_RATES = [
   { code: "USD", label: "دلار آمریکا", value: 70.5 },
@@ -47,12 +50,41 @@ function fmtDate(iso) {
     return "";
   }
 }
+function genTrackingCode() {
+  return "AF" + Math.floor(100000 + Math.random() * 900000);
+}
+
+// Resize + compress an uploaded receipt image in the browser before storing it,
+// so it stays small enough to fit comfortably inside the shared jsonbin record.
+function compressImageFile(file, maxWidth = 700, quality = 0.55) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("image load failed"));
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function AfganApp() {
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState(null);
   const [rates, setRates] = useState(null);
   const [orders, setOrders] = useState(null);
+  const [cardInfo, setCardInfo] = useState(null);
+  const [lastOrder, setLastOrder] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminTab, setAdminTab] = useState("dashboard");
@@ -74,6 +106,7 @@ export default function AfganApp() {
           setProducts((prev) => (JSON.stringify(prev) !== JSON.stringify(record.products) ? record.products : prev));
           setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
+          setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
         }
       } catch (e) {
         // network hiccup - just try again next interval
@@ -93,6 +126,7 @@ export default function AfganApp() {
     let products = (record && record.products) || [];
     let rates = (record && record.rates) || [];
     let orders = (record && record.orders) || [];
+    let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
     let needsSeed = false;
 
     if (!products.length) {
@@ -103,13 +137,16 @@ export default function AfganApp() {
       rates = DEFAULT_RATES;
       needsSeed = true;
     }
+    if (!record || !record.cardInfo) {
+      needsSeed = true;
+    }
 
     if (needsSeed) {
       try {
         await fetch(JSONBIN_URL, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-          body: JSON.stringify({ products, rates, orders }),
+          body: JSON.stringify({ products, rates, orders, cardInfo }),
         });
       } catch (e) {}
     }
@@ -117,6 +154,7 @@ export default function AfganApp() {
     setProducts(products);
     setRates(rates);
     setOrders(orders);
+    setCardInfo(cardInfo);
     setLoaded(true);
   }
 
@@ -132,15 +170,19 @@ export default function AfganApp() {
 
   async function saveProducts(next) {
     setProducts(next);
-    persist({ products: next, rates, orders });
+    persist({ products: next, rates, orders, cardInfo });
   }
   async function saveRates(next) {
     setRates(next);
-    persist({ products, rates: next, orders });
+    persist({ products, rates: next, orders, cardInfo });
   }
   async function saveOrders(next) {
     setOrders(next);
-    persist({ products, rates, orders: next });
+    persist({ products, rates, orders: next, cardInfo });
+  }
+  async function saveCardInfo(next) {
+    setCardInfo(next);
+    persist({ products, rates, orders, cardInfo: next });
   }
 
   function showToast(msg) {
@@ -149,7 +191,7 @@ export default function AfganApp() {
   }
 
   function placeOrder(order) {
-    const full = { id: newId("ord"), date: new Date().toISOString(), status: "pending", ...order };
+    const full = { id: newId("ord"), trackingCode: genTrackingCode(), date: new Date().toISOString(), status: "pending", ...order };
     saveOrders([full, ...(orders || [])]);
     return full;
   }
@@ -171,16 +213,16 @@ export default function AfganApp() {
       <Style />
       <Header onAdmin={() => setPage(isAdmin ? "admin" : "adminLogin")} />
       <main className="afgan-main">
-        {page === "home" && <Home rates={rates} setPage={setPage} />}
+        {page === "home" && <Home rates={rates} cardInfo={cardInfo} setPage={setPage} />}
         {page === "internet" && (
           <ProductList
             title="بسته اینترنت"
             icon="📶"
             products={products.filter((p) => p.category === "internet" && p.active)}
             onOrder={(item, form) => {
-              placeOrder({ type: "internet", item: item.title, price: item.price, customerName: form.name, phone: form.phone });
-              showToast("سفارش شما با موفقیت ثبت شد");
-              setPage("home");
+              const full = placeOrder({ type: "internet", item: item.title, price: item.price, currency: item.currency || "TOMAN", customerName: form.name, phone: form.phone });
+              setLastOrder(full);
+              setPage("confirm");
             }}
             onBack={() => setPage("home")}
           />
@@ -191,9 +233,9 @@ export default function AfganApp() {
             icon="📞"
             products={products.filter((p) => p.category === "credit" && p.active)}
             onOrder={(item, form) => {
-              placeOrder({ type: "credit", item: item.title, price: item.price, customerName: form.name, phone: form.phone });
-              showToast("سفارش شما با موفقیت ثبت شد");
-              setPage("home");
+              const full = placeOrder({ type: "credit", item: item.title, price: item.price, currency: item.currency || "TOMAN", customerName: form.name, phone: form.phone });
+              setLastOrder(full);
+              setPage("confirm");
             }}
             onBack={() => setPage("home")}
           />
@@ -201,22 +243,24 @@ export default function AfganApp() {
         {page === "remittance" && (
           <RemittanceForm
             onSubmit={(form) => {
-              placeOrder({
+              const full = placeOrder({
                 type: "remittance",
                 item: "حواله ارزی",
                 price: Number(form.amount) || 0,
+                currency: "AFN",
                 customerName: form.senderName,
                 phone: form.phone,
                 receiverName: form.receiverName,
                 destination: form.destination,
                 notes: form.notes,
               });
-              showToast("حواله شما با موفقیت ثبت شد");
-              setPage("home");
+              setLastOrder(full);
+              setPage("confirm");
             }}
             onBack={() => setPage("home")}
           />
         )}
+        {page === "confirm" && lastOrder && <OrderConfirmation order={lastOrder} onDone={() => setPage("home")} />}
         {page === "orders" && <MyOrders orders={orders} onBack={() => setPage("home")} />}
         {page === "adminLogin" && (
           <AdminLogin
@@ -236,11 +280,13 @@ export default function AfganApp() {
             products={products}
             rates={rates}
             orders={orders}
+            cardInfo={cardInfo}
             tab={adminTab}
             setTab={setAdminTab}
             saveProducts={saveProducts}
             saveRates={saveRates}
             saveOrders={saveOrders}
+            saveCardInfo={saveCardInfo}
             onLogout={() => {
               setIsAdmin(false);
               setPage("home");
@@ -285,7 +331,7 @@ function PageHeader({ title, icon, onBack }) {
   );
 }
 
-function Home({ rates, setPage }) {
+function Home({ rates, cardInfo, setPage }) {
   return (
     <div className="fade-in">
       <RateBoard rates={rates} />
@@ -295,6 +341,46 @@ function Home({ rates, setPage }) {
         <ServiceCard icon="💱" title="حواله ارزی" desc="ارسال حواله به سراسر جهان" onClick={() => setPage("remittance")} />
         <ServiceCard icon="📋" title="لیست سفارش" desc="پیگیری سفارش‌های ثبت شده" onClick={() => setPage("orders")} />
       </div>
+      {cardInfo && cardInfo.number && <PaymentCard cardInfo={cardInfo} />}
+      {cardInfo && cardInfo.whatsapp && <WhatsAppButton number={cardInfo.whatsapp} />}
+    </div>
+  );
+}
+
+function PaymentCard({ cardInfo }) {
+  return (
+    <div className="payment-card">
+      <div className="payment-card-label">شماره کارت جهت واریز</div>
+      <div className="payment-card-number">{cardInfo.number}</div>
+      <div className="payment-card-holder">{cardInfo.holder}</div>
+      {cardInfo.phone && <div className="payment-card-phone">📞 {cardInfo.phone}</div>}
+    </div>
+  );
+}
+
+function WhatsAppButton({ number }) {
+  const clean = String(number).replace(/[^0-9+]/g, "");
+  return (
+    <a className="whatsapp-btn" href={"https://wa.me/" + clean.replace("+", "")} target="_blank" rel="noreferrer">
+      <span className="whatsapp-icon">💬</span>
+      ارتباط با ما در واتساپ
+    </a>
+  );
+}
+
+function OrderConfirmation({ order, onDone }) {
+  return (
+    <div className="fade-in confirm-screen">
+      <div className="confirm-check">✅</div>
+      <div className="confirm-title">سفارش شما ثبت شد</div>
+      <div className="confirm-code-label">کد پیگیری سفارش</div>
+      <div className="confirm-code">{order.trackingCode}</div>
+      <div className="confirm-note">
+        لطفاً بعد از واریزی و ارسال فیش، کد پیگیری سفارش را حتماً همراه فیش ارسال کنید. ممنون
+      </div>
+      <button className="btn-primary full" onClick={onDone}>
+        بازگشت به صفحه اصلی
+      </button>
     </div>
   );
 }
@@ -329,10 +415,51 @@ function ServiceCard({ icon, title, desc, onClick }) {
   );
 }
 
+function ReceiptUploader({ receipt, setReceipt }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function handleFile(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const dataUrl = await compressImageFile(file);
+      setReceipt(dataUrl);
+    } catch (e2) {
+      setErr("بارگذاری عکس ناموفق بود، دوباره امتحان کنید");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="receipt-uploader">
+      <div className="receipt-label">فیش واریزی (اختیاری)</div>
+      {!receipt && (
+        <label className="receipt-btn">
+          {busy ? "در حال پردازش..." : "📎 انتخاب عکس فیش"}
+          <input type="file" accept="image/*" onChange={handleFile} hidden disabled={busy} />
+        </label>
+      )}
+      {receipt && (
+        <div className="receipt-preview">
+          <img src={receipt} alt="فیش واریزی" />
+          <button type="button" className="btn-ghost small" onClick={() => setReceipt(null)}>
+            حذف عکس
+          </button>
+        </div>
+      )}
+      {err && <div className="form-error">{err}</div>}
+    </div>
+  );
+}
+
 function ProductList({ title, icon, products, onOrder, onBack }) {
   const [selected, setSelected] = useState(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
 
   function submit(e) {
@@ -341,7 +468,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
       setError("لطفاً نام و شماره تماس را وارد کنید");
       return;
     }
-    onOrder(selected, { name, phone });
+    onOrder(selected, { name, phone, receipt });
   }
 
   return (
@@ -357,7 +484,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
                 <div className="product-subtitle">{p.subtitle}</div>
               </div>
               <div className="product-actions">
-                <div className="product-price">{fmt(p.price)} ؋</div>
+                <div className="product-price">{fmt(p.price)} {CURRENCY_LABELS[p.currency || "TOMAN"]}</div>
                 <button
                   className="btn-primary small"
                   onClick={() => {
@@ -375,7 +502,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
       {selected && (
         <form className="order-form" onSubmit={submit}>
           <div className="order-form-summary">
-            سفارش: <b>{selected.title}</b> — {fmt(selected.price)} ؋
+            سفارش: <b>{selected.title}</b> — {fmt(selected.price)} {CURRENCY_LABELS[selected.currency || "TOMAN"]}
           </div>
           <label>
             نام مشتری
@@ -385,6 +512,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
             شماره موبایل
             <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="07XXXXXXXX" type="tel" />
           </label>
+          <ReceiptUploader receipt={receipt} setReceipt={setReceipt} />
           {error && <div className="form-error">{error}</div>}
           <div className="form-btn-row">
             <button type="button" className="btn-ghost" onClick={() => setSelected(null)}>
@@ -402,6 +530,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
 
 function RemittanceForm({ onSubmit, onBack }) {
   const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
+  const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
 
   function set(k, v) {
@@ -414,7 +543,7 @@ function RemittanceForm({ onSubmit, onBack }) {
       setError("لطفاً همه فیلدهای ضروری را تکمیل کنید");
       return;
     }
-    onSubmit(form);
+    onSubmit({ ...form, receipt });
   }
 
   return (
@@ -482,8 +611,9 @@ function MyOrders({ orders, onBack }) {
             </div>
             <div className="order-card-body">
               <div>{o.item}</div>
-              <div className="order-card-price">{fmt(o.price)} ؋</div>
+              <div className="order-card-price">{fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}</div>
             </div>
+            <div className="order-card-track">کد پیگیری: <b>{o.trackingCode}</b></div>
             <div className="order-card-date">{fmtDate(o.date)}</div>
           </div>
         ))}
@@ -523,7 +653,7 @@ function AdminLogin({ onLogin, onBack }) {
   );
 }
 
-function AdminPanel({ products, rates, orders, tab, setTab, saveProducts, saveRates, saveOrders, onLogout, showToast }) {
+function AdminPanel({ products, rates, orders, cardInfo, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -538,6 +668,7 @@ function AdminPanel({ products, rates, orders, tab, setTab, saveProducts, saveRa
           ["products", "محصولات"],
           ["orders", "سفارش‌ها"],
           ["rates", "نرخ ارز"],
+          ["card", "کارت / واتساپ"],
         ].map(([key, label]) => (
           <button key={key} className={"admin-tab" + (tab === key ? " active" : "")} onClick={() => setTab(key)}>
             {label}
@@ -548,6 +679,50 @@ function AdminPanel({ products, rates, orders, tab, setTab, saveProducts, saveRa
       {tab === "products" && <ProductsManager products={products} saveProducts={saveProducts} showToast={showToast} />}
       {tab === "orders" && <OrdersManager orders={orders} saveOrders={saveOrders} />}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
+      {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
+    </div>
+  );
+}
+
+function CardManager({ cardInfo, saveCardInfo, showToast }) {
+  const [draft, setDraft] = useState({
+    number: (cardInfo && cardInfo.number) || "",
+    holder: (cardInfo && cardInfo.holder) || "",
+    phone: (cardInfo && cardInfo.phone) || "",
+    whatsapp: (cardInfo && cardInfo.whatsapp) || "",
+  });
+
+  function save() {
+    saveCardInfo(draft);
+    showToast("اطلاعات ذخیره شد");
+  }
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">
+        <span>💳 شماره کارت</span>
+      </div>
+      <div className="order-form">
+        <label>
+          شماره کارت
+          <input value={draft.number} onChange={(e) => setDraft((d) => ({ ...d, number: e.target.value }))} placeholder="مثال: 6037-XXXX-XXXX-XXXX" />
+        </label>
+        <label>
+          نام صاحب حساب
+          <input value={draft.holder} onChange={(e) => setDraft((d) => ({ ...d, holder: e.target.value }))} placeholder="نام و نام خانوادگی" />
+        </label>
+        <label>
+          شماره تماس
+          <input value={draft.phone} onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))} placeholder="07XXXXXXXX" type="tel" />
+        </label>
+        <label>
+          شماره واتساپ (با کد کشور، بدون + یا صفر اول)
+          <input value={draft.whatsapp} onChange={(e) => setDraft((d) => ({ ...d, whatsapp: e.target.value }))} placeholder="مثال: 93701234567" type="tel" />
+        </label>
+        <button className="btn-primary full" onClick={save}>
+          ذخیره
+        </button>
+      </div>
     </div>
   );
 }
@@ -574,8 +749,8 @@ function Dashboard({ orders, products }) {
         <div className="stat-label">تکمیل شده</div>
       </div>
       <div className="stat-card">
-        <div className="stat-value">{fmt(revenue)} ؋</div>
-        <div className="stat-label">درآمد تکمیل‌شده</div>
+        <div className="stat-value">{fmt(revenue)}</div>
+        <div className="stat-label">درآمد تکمیل‌شده (واحدهای مختلط)</div>
       </div>
       <div className="stat-card">
         <div className="stat-value">{fmt(activeProducts)}</div>
@@ -589,14 +764,16 @@ function ProductsManager({ products, saveProducts, showToast }) {
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(null); // 'internet' | 'credit' | null
-  const [newProd, setNewProd] = useState({ title: "", subtitle: "", price: "" });
+  const [newProd, setNewProd] = useState({ title: "", subtitle: "", price: "", currency: "TOMAN" });
 
   function startEdit(p) {
     setEditing(p.id);
-    setDraft({ title: p.title, subtitle: p.subtitle, price: p.price });
+    setDraft({ title: p.title, subtitle: p.subtitle, price: p.price, currency: p.currency || "TOMAN" });
   }
   function saveEdit(p) {
-    const next = products.map((x) => (x.id === p.id ? { ...x, title: draft.title, subtitle: draft.subtitle, price: Number(draft.price) || 0 } : x));
+    const next = products.map((x) =>
+      x.id === p.id ? { ...x, title: draft.title, subtitle: draft.subtitle, price: Number(draft.price) || 0, currency: draft.currency || "TOMAN" } : x
+    );
     saveProducts(next);
     setEditing(null);
     showToast("محصول به‌روزرسانی شد");
@@ -613,9 +790,17 @@ function ProductsManager({ products, saveProducts, showToast }) {
       showToast("عنوان و قیمت را وارد کنید");
       return;
     }
-    const item = { id: newId(category), category, title: newProd.title, subtitle: newProd.subtitle, price: Number(newProd.price) || 0, active: true };
+    const item = {
+      id: newId(category),
+      category,
+      title: newProd.title,
+      subtitle: newProd.subtitle,
+      price: Number(newProd.price) || 0,
+      currency: newProd.currency || "TOMAN",
+      active: true,
+    };
     saveProducts([...products, item]);
-    setNewProd({ title: "", subtitle: "", price: "" });
+    setNewProd({ title: "", subtitle: "", price: "", currency: "TOMAN" });
     setAdding(null);
     showToast("محصول اضافه شد");
   }
@@ -635,6 +820,13 @@ function ProductsManager({ products, saveProducts, showToast }) {
             <input placeholder="عنوان" value={newProd.title} onChange={(e) => setNewProd((n) => ({ ...n, title: e.target.value }))} />
             <input placeholder="زیرعنوان" value={newProd.subtitle} onChange={(e) => setNewProd((n) => ({ ...n, subtitle: e.target.value }))} />
             <input placeholder="قیمت" type="number" value={newProd.price} onChange={(e) => setNewProd((n) => ({ ...n, price: e.target.value }))} />
+            <select value={newProd.currency} onChange={(e) => setNewProd((n) => ({ ...n, currency: e.target.value }))}>
+              {CURRENCY_OPTIONS.map((c) => (
+                <option key={c} value={c}>
+                  {CURRENCY_LABELS[c]}
+                </option>
+              ))}
+            </select>
             <button className="btn-primary small" onClick={() => addProduct(category)}>
               ذخیره
             </button>
@@ -647,6 +839,13 @@ function ProductsManager({ products, saveProducts, showToast }) {
                 <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
                 <input value={draft.subtitle} onChange={(e) => setDraft((d) => ({ ...d, subtitle: e.target.value }))} />
                 <input type="number" value={draft.price} onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))} />
+                <select value={draft.currency} onChange={(e) => setDraft((d) => ({ ...d, currency: e.target.value }))}>
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c} value={c}>
+                      {CURRENCY_LABELS[c]}
+                    </option>
+                  ))}
+                </select>
                 <button className="btn-primary small" onClick={() => saveEdit(p)}>
                   ذخیره
                 </button>
@@ -663,7 +862,9 @@ function ProductsManager({ products, saveProducts, showToast }) {
                   <div className="product-subtitle">{p.subtitle}</div>
                 </div>
                 <div className="product-actions">
-                  <div className="product-price">{fmt(p.price)} ؋</div>
+                  <div className="product-price">
+                    {fmt(p.price)} {CURRENCY_LABELS[p.currency || "TOMAN"]}
+                  </div>
                   <button className="btn-ghost small" onClick={() => startEdit(p)}>
                     ویرایش
                   </button>
@@ -704,11 +905,12 @@ function OrdersManager({ orders, saveOrders }) {
             <span>
               {TYPE_ICONS[o.type]} {o.customerName || "—"}
             </span>
-            <span className="order-card-price">{fmt(o.price)} ؋</span>
+            <span className="order-card-price">{fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}</span>
           </div>
           <div className="admin-order-meta">
             <span>{o.phone}</span>
             <span>{o.item}</span>
+            <span>کد: {o.trackingCode}</span>
             <span>{fmtDate(o.date)}</span>
           </div>
           {expanded === o.id && o.type === "remittance" && (
@@ -947,6 +1149,45 @@ function Style() {
       .rate-row { display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 4px 14px rgba(14,77,68,0.06); }
       .rate-row-label { flex: 1; font-size: 13px; }
       .rate-row input { width: 90px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2ddce; font-family: inherit; }
+
+      .order-card-track { font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 4px; }
+
+      .confirm-screen { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 30px 10px; }
+      .confirm-check { font-size: 48px; }
+      .confirm-title { font-size: 18px; font-weight: 800; }
+      .confirm-code-label { font-size: 12px; color: var(--ink-soft); margin-top: 10px; }
+      .confirm-code {
+        font-size: 26px; font-weight: 800; letter-spacing: 2px; color: var(--primary);
+        background: var(--accent-soft); border-radius: 12px; padding: 8px 20px; font-variant-numeric: tabular-nums;
+      }
+      .confirm-note { font-size: 13px; color: var(--ink-soft); line-height: 1.8; background: #FBFAF6; border-radius: 14px; padding: 14px; margin: 6px 0 14px; }
+
+      .payment-card {
+        margin-top: 18px;
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 70%);
+        border-radius: 22px;
+        padding: 20px 22px;
+        color: #fff;
+        box-shadow: 0 10px 24px rgba(14,77,68,0.25);
+        position: relative;
+        overflow: hidden;
+      }
+      .payment-card::after {
+        content: ""; position: absolute; left: -30px; bottom: -30px; width: 120px; height: 120px;
+        border-radius: 50%; background: rgba(201,151,58,0.18);
+      }
+      .payment-card-label { font-size: 12px; opacity: 0.75; margin-bottom: 8px; }
+      .payment-card-number { font-size: 20px; font-weight: 800; letter-spacing: 2px; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+      .payment-card-holder { font-size: 13px; opacity: 0.9; }
+      .payment-card-phone { font-size: 12px; opacity: 0.8; margin-top: 4px; }
+
+      .whatsapp-btn {
+        display: flex; align-items: center; justify-content: center; gap: 8px;
+        margin-top: 12px; background: #22c55e; color: #fff; text-decoration: none;
+        border-radius: 16px; padding: 13px; font-weight: 700; font-size: 14px;
+        box-shadow: 0 6px 16px rgba(34,197,94,0.3);
+      }
+      .whatsapp-icon { font-size: 18px; }
 
       .toast {
         position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
