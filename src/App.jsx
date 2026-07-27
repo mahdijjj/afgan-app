@@ -25,10 +25,10 @@ const CURRENCY_LABELS = { AFN: "افغانی", TOMAN: "تومان", USD: "دال
 const CURRENCY_OPTIONS = ["TOMAN", "AFN", "USD"];
 
 const DEFAULT_RATES = [
-  { code: "USD", label: "دلار آمریکا", value: 70.5 },
-  { code: "EUR", label: "یورو", value: 76.2 },
-  { code: "AED", label: "درهم امارات", value: 19.2 },
-  { code: "PKR", label: "کلدار پاکستان", value: 0.25 },
+  { code: "USD", label: "دلار آمریکا", value: 60000 },
+  { code: "EUR", label: "یورو", value: 65000 },
+  { code: "AED", label: "درهم امارات", value: 16300 },
+  { code: "PKR", label: "کلدار پاکستان", value: 210 },
 ];
 
 const STATUS_LABELS = { pending: "در انتظار", processing: "در حال انجام", completed: "تکمیل شده", cancelled: "لغو شده" };
@@ -191,6 +191,11 @@ export default function AfganApp() {
     setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - amount } : prev));
   }
 
+  function requireLogin() {
+    showToast("برای ثبت سفارش ابتدا باید وارد حساب کاربری خود شوید");
+    setPage("customerLogin");
+  }
+
   if (!loaded) {
     return (
       <div className="afgan-root" dir="rtl">
@@ -214,6 +219,8 @@ export default function AfganApp() {
             title="بسته اینترنت"
             icon="📶"
             products={products.filter((p) => p.category === "internet" && p.active)}
+            isLoggedIn={!!currentCustomer}
+            onRequireLogin={requireLogin}
             onOrder={(item, form) => {
               if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
                 showToast("موجودی شما کافی نیست");
@@ -240,6 +247,8 @@ export default function AfganApp() {
             title="شارژ تماس"
             icon="📞"
             products={products.filter((p) => p.category === "credit" && p.active)}
+            isLoggedIn={!!currentCustomer}
+            onRequireLogin={requireLogin}
             onOrder={(item, form) => {
               if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
                 showToast("موجودی شما کافی نیست");
@@ -263,6 +272,8 @@ export default function AfganApp() {
         )}
         {page === "remittance" && (
           <RemittanceForm
+            isLoggedIn={!!currentCustomer}
+            onRequireLogin={requireLogin}
             onSubmit={(form) => {
               const amount = Number(form.amount) || 0;
               if (currentCustomer && (currentCustomer.wallet || 0) < amount) {
@@ -448,7 +459,7 @@ function RateBoard({ rates }) {
     <div className="rate-board">
       <div className="rate-board-title">
         <span>نرخ امروز ارز</span>
-        <span className="rate-board-unit">به افغانی</span>
+        <span className="rate-board-unit">به تومان</span>
       </div>
       <div className="rate-strip">
         {rates.map((r) => (
@@ -473,7 +484,7 @@ function ServiceCard({ icon, title, desc, onClick }) {
   );
 }
 
-function ProductList({ title, icon, products, onOrder, onBack }) {
+function ProductList({ title, icon, products, isLoggedIn, onRequireLogin, onOrder, onBack }) {
   const [selected, setSelected] = useState(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -505,6 +516,10 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
                 <button
                   className="btn-primary small"
                   onClick={() => {
+                    if (!isLoggedIn) {
+                      onRequireLogin();
+                      return;
+                    }
                     setSelected(p);
                     setError("");
                   }}
@@ -544,7 +559,7 @@ function ProductList({ title, icon, products, onOrder, onBack }) {
   );
 }
 
-function RemittanceForm({ onSubmit, onBack }) {
+function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack }) {
   const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
   const [error, setError] = useState("");
 
@@ -554,6 +569,10 @@ function RemittanceForm({ onSubmit, onBack }) {
 
   function submit(e) {
     e.preventDefault();
+    if (!isLoggedIn) {
+      onRequireLogin();
+      return;
+    }
     if (!form.senderName.trim() || !form.phone.trim() || !form.amount || !form.receiverName.trim() || !form.destination.trim()) {
       setError("لطفاً همه فیلدهای ضروری را تکمیل کنید");
       return;
