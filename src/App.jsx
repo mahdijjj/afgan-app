@@ -234,6 +234,12 @@ export default function AfganApp() {
     setOrders(newOrders);
     setCustomers(newCustomers);
     persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    // ارسال فاکتور سفارش به تلگرام مدیریت (در پس‌زمینه؛ خطای احتمالی جلوی ثبت سفارش را نمی‌گیرد)
+    fetch("/.netlify/functions/send-invoice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(full),
+    }).catch(() => {});
     return full;
   }
 
