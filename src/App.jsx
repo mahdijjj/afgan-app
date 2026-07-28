@@ -83,12 +83,12 @@ function extractNumber(str) {
   const match = normalized.match(/[\d]+(\.[\d]+)?/);
   return match ? parseFloat(match[0]) : null;
 }
-// در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰.
+// در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰، رند شده به عدد صحیح.
 function computeAutoCreditPrice(title, rate) {
   const num = extractNumber(title);
   const r = Number(rate) || 0;
   if (num === null || r <= 0) return null;
-  return Math.round((num / r) * 1000 * 100) / 100;
+  return Math.round((num / r) * 1000);
 }
 // شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
 // و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
@@ -1358,7 +1358,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
         )}
         {current.mode === "auto" && (
           <div className="hint-text" style={{ textAlign: "right" }}>
-            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم و سپس در ۱۰۰۰ ضرب می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
+            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم، سپس در ۱۰۰۰ ضرب و به عدد صحیح رند می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
           </div>
         )}
       </div>
