@@ -222,7 +222,15 @@ export default function AfganApp() {
   // ثبت سفارش و کسر کیف پول را در یک عملیات واحد و یک درخواست ذخیره‌سازی انجام می‌دهد
   // تا دو درخواست جداگانه با هم رقابت نکنند و باعث گم‌شدن سفارش یا کسر نشدن کیف پول نشوند.
   function placeOrderAndDeduct(order, deductAmount) {
-    const full = { id: newId("ord"), trackingCode: genTrackingCode(), date: new Date().toISOString(), status: "pending", ...order };
+    const full = {
+      id: newId("ord"),
+      trackingCode: genTrackingCode(),
+      date: new Date().toISOString(),
+      status: "pending",
+      walletDeduction: deductAmount || 0, // مبلغی که از کیف پول کسر شد - برای بازگشت خودکار در صورت لغو سفارش لازم است
+      refunded: false,
+      ...order,
+    };
     const newOrders = [full, ...(orders || [])];
     let newCustomers = customers;
     if (currentCustomer && deductAmount) {
@@ -234,13 +242,29 @@ export default function AfganApp() {
     setOrders(newOrders);
     setCustomers(newCustomers);
     persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
-    // ارسال فاکتور سفارش به تلگرام مدیریت (در پس‌زمینه؛ خطای احتمالی جلوی ثبت سفارش را نمی‌گیرد)
-    fetch("/.netlify/functions/send-invoice", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(full),
-    }).catch(() => {});
     return full;
+  }
+
+  // تغییر وضعیت سفارش توسط مدیر. اگر وضعیت به «لغو شده» تغییر کند و سفارش قبلاً
+  // بازگشت داده نشده باشد، مبلغ کسر شده از کیف پول به‌طور خودکار به حساب مشتری برمی‌گردد.
+  function updateOrderStatus(order, status) {
+    const shouldRefund = status === "cancelled" && !order.refunded && (order.walletDeduction || 0) > 0 && order.customerId;
+    const newOrders = (orders || []).map((x) =>
+      x.id === order.id ? { ...x, status, refunded: x.refunded || shouldRefund } : x
+    );
+    let newCustomers = customers;
+    if (shouldRefund) {
+      newCustomers = (customers || []).map((c) =>
+        c.id === order.customerId ? { ...c, wallet: (c.wallet || 0) + order.walletDeduction } : c
+      );
+      if (currentCustomer && currentCustomer.id === order.customerId) {
+        setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) + order.walletDeduction } : prev));
+      }
+      showToast("سفارش لغو شد و مبلغ " + fmt(order.walletDeduction) + " تومان به کیف پول مشتری بازگشت داده شد");
+    }
+    setOrders(newOrders);
+    setCustomers(newCustomers);
+    persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
   }
 
   function requireLogin() {
@@ -280,13 +304,17 @@ export default function AfganApp() {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
+              const opInternet = (operators || []).find((op) => op.id === item.operatorId);
               const full = placeOrderAndDeduct(
                 {
                   type: "internet",
                   item: item.title,
+                  subtitle: item.subtitle || "",
+                  operatorName: opInternet ? opInternet.name : "",
                   price: item.price,
                   currency: item.currency || "TOMAN",
                   customerName: currentCustomer ? currentCustomer.name : "",
+                  customerUsername: currentCustomer ? currentCustomer.username : "",
                   phone: form.phone,
                   customerId: currentCustomer ? currentCustomer.id : undefined,
                 },
@@ -312,13 +340,17 @@ export default function AfganApp() {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
+              const opCredit = (operators || []).find((op) => op.id === item.operatorId);
               const full = placeOrderAndDeduct(
                 {
                   type: "credit",
                   item: item.title,
+                  subtitle: item.subtitle || "",
+                  operatorName: opCredit ? opCredit.name : "",
                   price: item.price,
                   currency: item.currency || "TOMAN",
                   customerName: currentCustomer ? currentCustomer.name : "",
+                  customerUsername: currentCustomer ? currentCustomer.username : "",
                   phone: form.phone,
                   customerId: currentCustomer ? currentCustomer.id : undefined,
                 },
@@ -356,6 +388,7 @@ export default function AfganApp() {
                   tomanAmount,
                   afnRateUsed: Number(afnRateValue) || 0,
                   customerName: form.senderName,
+                  customerUsername: currentCustomer ? currentCustomer.username : "",
                   phone: form.phone,
                   receiverName: form.receiverName,
                   destination: form.destination,
@@ -429,6 +462,7 @@ export default function AfganApp() {
             saveProducts={saveProducts}
             saveRates={saveRates}
             saveOrders={saveOrders}
+            updateOrderStatus={updateOrderStatus}
             saveCardInfo={saveCardInfo}
             saveCustomers={saveCustomers}
             saveOperators={saveOperators}
@@ -767,11 +801,20 @@ function OrderCard({ o }) {
         <span className={"status-badge status-" + o.status}>{STATUS_LABELS[o.status]}</span>
       </div>
       <div className="order-card-body">
-        <div>{o.item}</div>
+        <div>
+          {o.item}
+          {o.operatorName ? " (" + o.operatorName + ")" : ""}
+        </div>
         <div className="order-card-price">
           {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
         </div>
       </div>
+      {o.subtitle && <div className="order-card-track">{o.subtitle}</div>}
+      {o.type === "remittance" && (
+        <div className="order-card-track">
+          گیرنده: {o.receiverName} — مقصد: {o.destination}
+        </div>
+      )}
       {o.type === "remittance" && !!o.tomanAmount && (
         <div className="order-card-track">مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان</div>
       )}
@@ -971,7 +1014,7 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
 }
 
 
-function AdminPanel({ products, rates, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveOrders, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
+function AdminPanel({ products, rates, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -998,7 +1041,9 @@ function AdminPanel({ products, rates, orders, cardInfo, customers, operators, t
       {tab === "products" && (
         <ProductsManager products={products} operators={operators} saveProducts={saveProducts} saveOperators={saveOperators} showToast={showToast} />
       )}
-      {tab === "orders" && <OrdersManager orders={orders} saveOrders={saveOrders} />}
+      {tab === "orders" && (
+        <OrdersManager orders={orders} customers={customers} saveOrders={saveOrders} updateOrderStatus={updateOrderStatus} />
+      )}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
       {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
       {tab === "customers" && <CustomersManager customers={customers} saveCustomers={saveCustomers} showToast={showToast} />}
@@ -1407,53 +1452,73 @@ function OperatorProducts({ operator, category, products, saveProducts, onRemove
   );
 }
 
-function OrdersManager({ orders, saveOrders }) {
+function OrdersManager({ orders, customers, saveOrders, updateOrderStatus }) {
   const [expanded, setExpanded] = useState(null);
   function setStatus(o, status) {
-    saveOrders(orders.map((x) => (x.id === o.id ? { ...x, status } : x)));
+    // لغو سفارش از این تابع عبور می‌کند تا در صورت لغو، مبلغ کسر شده به کیف پول مشتری بازگردد.
+    updateOrderStatus(o, status);
   }
   function removeOrder(o) {
     saveOrders(orders.filter((x) => x.id !== o.id));
   }
+  function customerFor(o) {
+    return (customers || []).find((c) => c.id === o.customerId);
+  }
   return (
     <div className="admin-section">
       {orders.length === 0 && <div className="empty-state">هنوز سفارشی ثبت نشده است.</div>}
-      {orders.map((o) => (
-        <div className="admin-order-row" key={o.id}>
-          <div className="admin-order-top" onClick={() => setExpanded(expanded === o.id ? null : o.id)}>
-            <span>
-              {TYPE_ICONS[o.type]} {o.customerName || "—"}
-            </span>
-            <span className="order-card-price">
-              {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
-            </span>
-          </div>
-          <div className="admin-order-meta">
-            <span>{o.phone}</span>
-            <span>{o.item}</span>
-            <span>کد: {o.trackingCode}</span>
-            <span>{fmtDate(o.date)}</span>
-          </div>
-          {expanded === o.id && o.type === "remittance" && (
-            <div className="admin-order-detail">
-              <div>گیرنده: {o.receiverName}</div>
-              <div>مقصد: {o.destination}</div>
-              {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
-              {o.notes && <div>توضیحات: {o.notes}</div>}
+      {orders.map((o) => {
+        const cust = customerFor(o);
+        return (
+          <div className="admin-order-row" key={o.id}>
+            <div className="admin-order-top" onClick={() => setExpanded(expanded === o.id ? null : o.id)}>
+              <span>
+                {TYPE_ICONS[o.type]} {o.customerName || "—"}
+                {o.customerUsername ? " (@" + o.customerUsername + ")" : ""}
+              </span>
+              <span className="order-card-price">
+                {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
+              </span>
             </div>
-          )}
-          <div className="status-row">
-            {STATUS_ORDER.map((s) => (
-              <button key={s} className={"status-pill" + (o.status === s ? " active status-" + s : "")} onClick={() => setStatus(o, s)}>
-                {STATUS_LABELS[s]}
+            <div className="admin-order-meta">
+              <span>{o.phone}</span>
+              <span>{TYPE_LABELS[o.type]}</span>
+              <span>کد: {o.trackingCode}</span>
+              <span>{fmtDate(o.date)}</span>
+            </div>
+            {expanded === o.id && (
+              <div className="admin-order-detail">
+                <div>کاربر: {cust ? (cust.name || "—") + " (@" + cust.username + ")" : o.customerId ? "کاربر یافت نشد" : "مهمان"}</div>
+                <div>کالا / سرویس: {o.item}</div>
+                {o.subtitle && <div>توضیحات بسته: {o.subtitle}</div>}
+                {o.operatorName && <div>اپراتور: {o.operatorName}</div>}
+                {o.type === "remittance" && (
+                  <>
+                    <div>گیرنده: {o.receiverName}</div>
+                    <div>مقصد: {o.destination}</div>
+                    {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
+                    {o.notes && <div>توضیحات: {o.notes}</div>}
+                  </>
+                )}
+                {o.type !== "remittance" && !!o.walletDeduction && (
+                  <div>مبلغ کسر شده از کیف پول: {fmt(o.walletDeduction)} تومان</div>
+                )}
+                {o.refunded && <div>✅ مبلغ این سفارش به کیف پول مشتری بازگشت داده شده است</div>}
+              </div>
+            )}
+            <div className="status-row">
+              {STATUS_ORDER.map((s) => (
+                <button key={s} className={"status-pill" + (o.status === s ? " active status-" + s : "")} onClick={() => setStatus(o, s)}>
+                  {STATUS_LABELS[s]}
+                </button>
+              ))}
+              <button className="btn-danger small" onClick={() => removeOrder(o)}>
+                حذف سفارش
               </button>
-            ))}
-            <button className="btn-danger small" onClick={() => removeOrder(o)}>
-              حذف سفارش
-            </button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
