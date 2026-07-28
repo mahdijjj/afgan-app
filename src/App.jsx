@@ -32,6 +32,10 @@ const DEFAULT_RATES = [
   { code: "AFN", label: "افغانی (نرخ حواله)", value: 0.345 },
 ];
 
+// تنظیمات قیمت‌گذاری بخش شارژ تماس: روش «دستی» یعنی مدیر قیمت هر محصول را خودش وارد می‌کند،
+// و روش «خودکار» یعنی با تعیین یک نرخ توسط مدیر، قیمت از روی عدد فیلد عنوان محاسبه می‌شود.
+const DEFAULT_CREDIT_SETTINGS = { mode: "manual", rate: 0 };
+
 // مبلغ افغانی حواله را با نرخ روز افغانی به تومان تبدیل می‌کند و رقم اعشار را حذف می‌کند.
 function afnToToman(amountAfn, afnRateValue) {
   const rate = Number(afnRateValue) || 0;
@@ -61,6 +65,31 @@ function fmtDate(iso) {
 function genTrackingCode() {
   return "AF" + Math.floor(100000 + Math.random() * 900000);
 }
+// ارقام فارسی/عربی را به ارقام انگلیسی تبدیل می‌کند تا بتوان از متن فیلد عنوان عدد استخراج کرد.
+function faToEnDigits(str) {
+  const faDigits = "۰۱۲۳۴۵۶۷۸۹";
+  const arDigits = "٠١٢٣٤٥٦٧٨٩";
+  return String(str || "").replace(/[۰-۹٠-٩]/g, (d) => {
+    const i = faDigits.indexOf(d);
+    if (i > -1) return String(i);
+    const j = arDigits.indexOf(d);
+    if (j > -1) return String(j);
+    return d;
+  });
+}
+// اولین عدد موجود در فیلد عنوان (مثلاً از «۱۰۰ افغانی» عدد ۱۰۰) را استخراج می‌کند.
+function extractNumber(str) {
+  const normalized = faToEnDigits(str);
+  const match = normalized.match(/[\d]+(\.[\d]+)?/);
+  return match ? parseFloat(match[0]) : null;
+}
+// در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰.
+function computeAutoCreditPrice(title, rate) {
+  const num = extractNumber(title);
+  const r = Number(rate) || 0;
+  if (num === null || r <= 0) return null;
+  return Math.round((num / r) * 1000 * 100) / 100;
+}
 // شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
 // و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
 function normalizeWhatsApp(number) {
@@ -74,6 +103,7 @@ export default function AfganApp() {
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState(null);
   const [rates, setRates] = useState(null);
+  const [creditSettings, setCreditSettings] = useState(null);
   const [orders, setOrders] = useState(null);
   const [cardInfo, setCardInfo] = useState(null);
   const [customers, setCustomers] = useState(null);
@@ -114,6 +144,7 @@ export default function AfganApp() {
         if (record) {
           setProducts((prev) => (JSON.stringify(prev) !== JSON.stringify(record.products) ? record.products : prev));
           setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
+          setCreditSettings((prev) => (JSON.stringify(prev) !== JSON.stringify(record.creditSettings) ? record.creditSettings : prev));
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
           setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
           setCustomers((prev) => (JSON.stringify(prev) !== JSON.stringify(record.customers) ? record.customers : prev));
@@ -136,6 +167,7 @@ export default function AfganApp() {
 
     let products = (record && record.products) || [];
     let rates = (record && record.rates) || [];
+    let creditSettings = (record && record.creditSettings) || null;
     let orders = (record && record.orders) || [];
     let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
     let customers = (record && record.customers) || [];
@@ -148,6 +180,10 @@ export default function AfganApp() {
     }
     if (!rates.length) {
       rates = DEFAULT_RATES;
+      needsSeed = true;
+    }
+    if (!creditSettings) {
+      creditSettings = DEFAULT_CREDIT_SETTINGS;
       needsSeed = true;
     }
     if (!record || !record.cardInfo) {
@@ -165,13 +201,14 @@ export default function AfganApp() {
         await fetch(JSONBIN_URL, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-          body: JSON.stringify({ products, rates, orders, cardInfo, customers, operators }),
+          body: JSON.stringify({ products, rates, creditSettings, orders, cardInfo, customers, operators }),
         });
       } catch (e) {}
     }
 
     setProducts(products);
     setRates(rates);
+    setCreditSettings(creditSettings);
     setOrders(orders);
     setCardInfo(cardInfo);
     setCustomers(customers);
@@ -191,27 +228,31 @@ export default function AfganApp() {
 
   async function saveProducts(next) {
     setProducts(next);
-    persist({ products: next, rates, orders, cardInfo, customers, operators });
+    persist({ products: next, rates, creditSettings, orders, cardInfo, customers, operators });
   }
   async function saveRates(next) {
     setRates(next);
-    persist({ products, rates: next, orders, cardInfo, customers, operators });
+    persist({ products, rates: next, creditSettings, orders, cardInfo, customers, operators });
+  }
+  async function saveCreditSettings(next) {
+    setCreditSettings(next);
+    persist({ products, rates, creditSettings: next, orders, cardInfo, customers, operators });
   }
   async function saveOrders(next) {
     setOrders(next);
-    persist({ products, rates, orders: next, cardInfo, customers, operators });
+    persist({ products, rates, creditSettings, orders: next, cardInfo, customers, operators });
   }
   async function saveCardInfo(next) {
     setCardInfo(next);
-    persist({ products, rates, orders, cardInfo: next, customers, operators });
+    persist({ products, rates, creditSettings, orders, cardInfo: next, customers, operators });
   }
   async function saveCustomers(next) {
     setCustomers(next);
-    persist({ products, rates, orders, cardInfo, customers: next, operators });
+    persist({ products, rates, creditSettings, orders, cardInfo, customers: next, operators });
   }
   async function saveOperators(next) {
     setOperators(next);
-    persist({ products, rates, orders, cardInfo, customers, operators: next });
+    persist({ products, rates, creditSettings, orders, cardInfo, customers, operators: next });
   }
 
   function showToast(msg) {
@@ -241,7 +282,7 @@ export default function AfganApp() {
     }
     setOrders(newOrders);
     setCustomers(newCustomers);
-    persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
     return full;
   }
 
@@ -264,7 +305,7 @@ export default function AfganApp() {
     }
     setOrders(newOrders);
     setCustomers(newCustomers);
-    persist({ products, rates, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
   }
 
   function requireLogin() {
@@ -453,6 +494,7 @@ export default function AfganApp() {
           <AdminPanel
             products={products}
             rates={rates}
+            creditSettings={creditSettings}
             orders={orders}
             cardInfo={cardInfo}
             customers={customers}
@@ -461,6 +503,7 @@ export default function AfganApp() {
             setTab={setAdminTab}
             saveProducts={saveProducts}
             saveRates={saveRates}
+            saveCreditSettings={saveCreditSettings}
             saveOrders={saveOrders}
             updateOrderStatus={updateOrderStatus}
             saveCardInfo={saveCardInfo}
@@ -1014,7 +1057,7 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
 }
 
 
-function AdminPanel({ products, rates, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
+function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -1039,7 +1082,15 @@ function AdminPanel({ products, rates, orders, cardInfo, customers, operators, t
       </div>
       {tab === "dashboard" && <Dashboard orders={orders} products={products} />}
       {tab === "products" && (
-        <ProductsManager products={products} operators={operators} saveProducts={saveProducts} saveOperators={saveOperators} showToast={showToast} />
+        <ProductsManager
+          products={products}
+          operators={operators}
+          saveProducts={saveProducts}
+          saveOperators={saveOperators}
+          creditSettings={creditSettings}
+          saveCreditSettings={saveCreditSettings}
+          showToast={showToast}
+        />
       )}
       {tab === "orders" && (
         <OrdersManager orders={orders} customers={customers} saveOrders={saveOrders} updateOrderStatus={updateOrderStatus} />
@@ -1226,7 +1277,7 @@ function Dashboard({ orders, products }) {
   );
 }
 
-function ProductsManager({ products, operators, saveProducts, saveOperators, showToast }) {
+function ProductsManager({ products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
   return (
     <div>
       <CategorySection
@@ -1245,13 +1296,77 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, sho
         operators={operators}
         saveProducts={saveProducts}
         saveOperators={saveOperators}
+        creditSettings={creditSettings}
+        saveCreditSettings={saveCreditSettings}
         showToast={showToast}
       />
     </div>
   );
 }
 
-function CategorySection({ category, label, products, operators, saveProducts, saveOperators, showToast }) {
+// تنظیمات روش قیمت‌گذاری بخش شارژ تماس: انتخاب دستی/خودکار و تعیین نرخ برای روش خودکار.
+function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }) {
+  const current = creditSettings || DEFAULT_CREDIT_SETTINGS;
+  const [rateDraft, setRateDraft] = useState(current.rate || "");
+
+  useEffect(() => {
+    setRateDraft(current.rate || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current.rate]);
+
+  function setMode(mode) {
+    saveCreditSettings({ ...current, mode });
+    showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار فعال شد" : "روش قیمت‌گذاری دستی فعال شد");
+  }
+
+  function saveRate() {
+    const rate = Number(rateDraft) || 0;
+    if (rate <= 0) {
+      showToast("نرخ معتبر وارد کنید");
+      return;
+    }
+    saveCreditSettings({ ...current, rate });
+    showToast("نرخ ذخیره شد");
+  }
+
+  return (
+    <div className="operator-block">
+      <div className="operator-block-header">
+        <span>⚙️ تعیین نرخ و روش قیمت‌گذاری</span>
+      </div>
+      <div className="operator-block-body">
+        <div className="status-row" style={{ marginBottom: 10 }}>
+          <button className={"status-pill" + (current.mode === "manual" ? " active status-completed" : "")} onClick={() => setMode("manual")}>
+            قیمت‌گذاری دستی
+          </button>
+          <button className={"status-pill" + (current.mode === "auto" ? " active status-completed" : "")} onClick={() => setMode("auto")}>
+            قیمت‌گذاری خودکار
+          </button>
+        </div>
+        {current.mode === "auto" && (
+          <div className="add-form">
+            <input
+              placeholder="نرخ (مثلاً نرخ تبدیل)"
+              type="number"
+              value={rateDraft}
+              onChange={(e) => setRateDraft(e.target.value)}
+            />
+            <button className="btn-primary small" onClick={saveRate}>
+              ذخیره نرخ
+            </button>
+          </div>
+        )}
+        {current.mode === "auto" && (
+          <div className="hint-text" style={{ textAlign: "right" }}>
+            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم و سپس در ۱۰۰۰ ضرب می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CategorySection({ category, label, products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
   const [newOpName, setNewOpName] = useState("");
   const catOperators = (operators || []).filter((o) => o.category === category);
   const ungrouped = products.filter((p) => p.category === category && !p.operatorId);
@@ -1279,6 +1394,9 @@ function CategorySection({ category, label, products, operators, saveProducts, s
       <div className="admin-section-title">
         <span>{label}</span>
       </div>
+      {category === "credit" && (
+        <CreditPricingSettings creditSettings={creditSettings} saveCreditSettings={saveCreditSettings} showToast={showToast} />
+      )}
       <div className="add-form">
         <input placeholder="نام اپراتور جدید (مثلاً روشان)" value={newOpName} onChange={(e) => setNewOpName(e.target.value)} />
         <button className="btn-primary small" onClick={addOperator}>
@@ -1292,21 +1410,27 @@ function CategorySection({ category, label, products, operators, saveProducts, s
           category={category}
           products={products}
           saveProducts={saveProducts}
+          creditSettings={creditSettings}
           onRemoveOperator={() => removeOperator(op)}
           showToast={showToast}
         />
       ))}
-      {ungrouped.length > 0 && <OperatorProducts operator={null} category={category} products={products} saveProducts={saveProducts} showToast={showToast} />}
+      {ungrouped.length > 0 && (
+        <OperatorProducts operator={null} category={category} products={products} saveProducts={saveProducts} creditSettings={creditSettings} showToast={showToast} />
+      )}
     </div>
   );
 }
 
-function OperatorProducts({ operator, category, products, saveProducts, onRemoveOperator, showToast }) {
+function OperatorProducts({ operator, category, products, saveProducts, creditSettings, onRemoveOperator, showToast }) {
   const [open, setOpen] = useState(true);
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
   const [newProd, setNewProd] = useState({ title: "", subtitle: "", price: "", currency: "TOMAN" });
+
+  // قیمت‌گذاری خودکار فقط برای دسته «شارژ تماس» و وقتی مدیر نرخ را تعیین و روش خودکار را فعال کرده باشد اعمال می‌شود.
+  const autoPricing = category === "credit" && creditSettings && creditSettings.mode === "auto" && Number(creditSettings.rate) > 0;
 
   const list = products.filter((p) => p.category === category && (operator ? p.operatorId === operator.id : !p.operatorId));
 
@@ -1350,6 +1474,28 @@ function OperatorProducts({ operator, category, products, saveProducts, onRemove
     setAdding(false);
     showToast("محصول اضافه شد");
   }
+  // در روش قیمت‌گذاری خودکار، با تغییر عنوان، عدد آن بر نرخ تعیین‌شده تقسیم و در فیلد قیمت (فرم افزودن) قرار می‌گیرد.
+  function handleNewTitleChange(title) {
+    setNewProd((n) => {
+      const next = { ...n, title };
+      if (autoPricing) {
+        const computed = computeAutoCreditPrice(title, creditSettings.rate);
+        if (computed !== null) next.price = String(computed);
+      }
+      return next;
+    });
+  }
+  // همان محاسبه، هنگام ویرایش عنوان یک محصول موجود.
+  function handleDraftTitleChange(title) {
+    setDraft((d) => {
+      const next = { ...d, title };
+      if (autoPricing) {
+        const computed = computeAutoCreditPrice(title, creditSettings.rate);
+        if (computed !== null) next.price = String(computed);
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="operator-block">
@@ -1383,9 +1529,16 @@ function OperatorProducts({ operator, category, products, saveProducts, onRemove
           </div>
           {adding && (
             <div className="add-form">
-              <input placeholder="عنوان" value={newProd.title} onChange={(e) => setNewProd((n) => ({ ...n, title: e.target.value }))} />
+              <input placeholder="عنوان" value={newProd.title} onChange={(e) => handleNewTitleChange(e.target.value)} />
               <input placeholder="زیرعنوان" value={newProd.subtitle} onChange={(e) => setNewProd((n) => ({ ...n, subtitle: e.target.value }))} />
-              <input placeholder="قیمت" type="number" value={newProd.price} onChange={(e) => setNewProd((n) => ({ ...n, price: e.target.value }))} />
+              <input
+                placeholder="قیمت"
+                type="number"
+                value={newProd.price}
+                readOnly={autoPricing}
+                title={autoPricing ? "در روش خودکار، قیمت از روی عنوان محاسبه می‌شود" : undefined}
+                onChange={(e) => !autoPricing && setNewProd((n) => ({ ...n, price: e.target.value }))}
+              />
               <select value={newProd.currency} onChange={(e) => setNewProd((n) => ({ ...n, currency: e.target.value }))}>
                 {CURRENCY_OPTIONS.map((c) => (
                   <option key={c} value={c}>
@@ -1403,9 +1556,15 @@ function OperatorProducts({ operator, category, products, saveProducts, onRemove
             <div className="admin-product-row" key={p.id}>
               {editing === p.id ? (
                 <div className="add-form">
-                  <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
+                  <input value={draft.title} onChange={(e) => handleDraftTitleChange(e.target.value)} />
                   <input value={draft.subtitle} onChange={(e) => setDraft((d) => ({ ...d, subtitle: e.target.value }))} />
-                  <input type="number" value={draft.price} onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))} />
+                  <input
+                    type="number"
+                    value={draft.price}
+                    readOnly={autoPricing}
+                    title={autoPricing ? "در روش خودکار، قیمت از روی عنوان محاسبه می‌شود" : undefined}
+                    onChange={(e) => !autoPricing && setDraft((d) => ({ ...d, price: e.target.value }))}
+                  />
                   <select value={draft.currency} onChange={(e) => setDraft((d) => ({ ...d, currency: e.target.value }))}>
                     {CURRENCY_OPTIONS.map((c) => (
                       <option key={c} value={c}>
