@@ -919,30 +919,68 @@ function MyOrders({ orders, currentCustomer, onBack }) {
 function AdminLogin({ onLogin, onBack }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  function submit(e) {
+    e.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    // small delay just for the loading animation; the real check happens in onLogin
+    setTimeout(() => {
+      setLoading(false);
+      onLogin(email, password);
+    }, 650);
+  }
+
   return (
     <div className="fade-in">
       <PageHeader title="ورود مدیریت" icon="🔐" onBack={onBack} />
-      <form
-        className="order-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onLogin(email, password);
-        }}
-      >
-        <label>
-          ایمیل
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ایمیل مدیریت" type="email" />
-        </label>
-        <label>
-          رمز عبور
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="رمز عبور" type="password" />
-        </label>
-        <div className="form-btn-row">
-          <button type="submit" className="btn-primary full">
-            ورود
-          </button>
+      <div className="admin-login-wrap">
+        <div className="admin-login-card">
+          <div className="admin-login-badge">
+            <span className="admin-login-badge-ring" />
+            <span className="admin-login-badge-icon">🛡️</span>
+          </div>
+          <div className="admin-login-title">پنل مدیریت</div>
+          <div className="admin-login-sub">برای ادامه، وارد حساب مدیریتی شوید</div>
+
+          <form className="admin-login-form" onSubmit={submit}>
+            <label className="admin-field">
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder=" "
+                type="email"
+                autoComplete="username"
+                required
+              />
+              <span className="admin-field-label">ایمیل مدیریت</span>
+            </label>
+            <label className="admin-field">
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder=" "
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+              <span className="admin-field-label">رمز عبور</span>
+            </label>
+
+            <button
+              type="submit"
+              className={`btn-primary full admin-login-btn${loading ? " loading" : ""}`}
+              disabled={loading}
+            >
+              <span className="admin-login-btn-txt">ورود به سامانه</span>
+              <span className="admin-login-btn-loader">
+                <span className="admin-spin" /> در حال بررسی…
+              </span>
+            </button>
+          </form>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
@@ -2006,6 +2044,65 @@ function Style() {
         background: var(--primary-dark); color: #fff; padding: 12px 20px; border-radius: 14px;
         font-size: 13px; box-shadow: 0 8px 20px rgba(0,0,0,0.25); z-index: 50; max-width: 90%; text-align: center;
       }
+
+      /* ===== Animated admin login ===== */
+      .admin-login-wrap { display: flex; justify-content: center; padding: 6px 0 4px; }
+      .admin-login-card {
+        position: relative; width: 100%; max-width: 360px;
+        background: var(--surface); border-radius: 22px; padding: 32px 22px 26px;
+        box-shadow: 0 10px 28px rgba(14,77,68,0.12); text-align: center; overflow: hidden;
+        animation: adminCardIn .5s cubic-bezier(.16,1,.3,1) both;
+      }
+      .admin-login-card::before {
+        content: ""; position: absolute; inset: 0; border-radius: 22px; padding: 1.5px;
+        background: conic-gradient(from 0deg, var(--accent), var(--primary), transparent 35%, transparent 65%, var(--accent));
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        animation: adminBorderSpin 6s linear infinite; pointer-events: none;
+      }
+      @keyframes adminBorderSpin { to { transform: rotate(360deg); } }
+      @keyframes adminCardIn { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
+
+      .admin-login-badge { position: relative; width: 62px; height: 62px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: center; }
+      .admin-login-badge-icon { font-size: 26px; position: relative; z-index: 2; }
+      .admin-login-badge-ring {
+        position: absolute; inset: 0; border-radius: 50%;
+        background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+        animation: adminPulse 2.2s ease-in-out infinite;
+      }
+      @keyframes adminPulse { 0%, 100% { transform: scale(.88); opacity: .55; } 50% { transform: scale(1.15); opacity: 1; } }
+
+      .admin-login-title { font-size: 18px; font-weight: 800; color: var(--primary); margin-bottom: 4px; }
+      .admin-login-sub { font-size: 12px; color: var(--ink-soft); margin-bottom: 24px; }
+
+      .admin-login-form { display: flex; flex-direction: column; gap: 16px; text-align: right; }
+      .admin-field { position: relative; display: block; }
+      .admin-field input {
+        width: 100%; font-family: inherit; padding: 17px 12px 9px; border-radius: 12px;
+        border: 1px solid #e2ddce; font-size: 14px; color: var(--ink); background: #FBFAF6;
+        transition: border-color .2s, box-shadow .2s;
+      }
+      .admin-field input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(14,77,68,0.10); }
+      .admin-field-label {
+        position: absolute; top: 15px; right: 12px; font-size: 13px; color: var(--ink-soft);
+        pointer-events: none; transition: all .18s ease; background: transparent;
+      }
+      .admin-field input:focus + .admin-field-label,
+      .admin-field input:not(:placeholder-shown) + .admin-field-label {
+        top: 5px; font-size: 10.5px; color: var(--primary); font-weight: 700;
+      }
+
+      .admin-login-btn { position: relative; margin-top: 6px; }
+      .admin-login-btn:disabled { opacity: .85; cursor: default; }
+      .admin-login-btn-loader { display: none; align-items: center; justify-content: center; gap: 8px; }
+      .admin-login-btn.loading .admin-login-btn-txt { display: none; }
+      .admin-login-btn.loading .admin-login-btn-loader { display: flex; }
+      .admin-spin {
+        width: 14px; height: 14px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+        animation: adminSpin .7s linear infinite;
+      }
+      @keyframes adminSpin { to { transform: rotate(360deg); } }
 
       /* ===== Lamp pull-cord login ===== */
       .lamp-login { display: flex; flex-direction: column; align-items: center; padding: 6px 0 4px; }
