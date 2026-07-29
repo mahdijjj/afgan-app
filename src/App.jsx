@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 
 const ADMIN_EMAIL = "mahdisultani10@gmail.com";
 const ADMIN_PASSWORD = "Mahdi35";
@@ -7,7 +7,7 @@ const ADMIN_PASSWORD = "Mahdi35";
 const JSONBIN_BIN_ID = "6a668a3cf5f4af5e29c50f2c";
 const JSONBIN_API_KEY = "$2a$10$M4JrqWL2WXu2iu2baYsD2ujKh0p6P3WYBM2umsli.oE4d95F8ZadO";
 const JSONBIN_URL = "https://api.jsonbin.io/v3/b/" + JSONBIN_BIN_ID;
-const POLL_INTERVAL_MS = 20000; // how often the app re-checks jsonbin for changes made by others
+const POLL_INTERVAL_MS = 60000; // how often the app re-checks jsonbin for changes made by others
 // ==============================
 
 const DEFAULT_PRODUCTS = [
@@ -99,6 +99,25 @@ function normalizeWhatsApp(number) {
   return digits;
 }
 
+// جزئیات سفارش را به فانکشن نتلیفای (netlify/functions/send-invoice.js) می‌فرستد
+// تا آن فانکشن پیام را با نام کاربری و تمام جزئیات سفارش به تلگرام مدیر ارسال کند.
+// شکست این درخواست نباید مانع ثبت سفارش برای مشتری شود، پس فقط در کنسول لاگ می‌شود.
+async function sendOrderToTelegram(order) {
+  try {
+    const res = await fetch("/.netlify/functions/send-invoice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(order),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("send-invoice failed:", res.status, errText);
+    }
+  } catch (e) {
+    console.error("send-invoice request error:", e);
+  }
+}
+
 export default function AfganApp() {
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState(null);
@@ -114,16 +133,6 @@ export default function AfganApp() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminTab, setAdminTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
-
-  // همیشه آخرین نسخه‌ی کامل داده‌ها را نگه می‌دارد (بر خلاف state که به‌روزرسانی‌اش async است)
-  // تا وقتی چند تغییر پشت سر هم ذخیره می‌شوند، هرکدام روی نسخه‌ی قدیمی/بیات دیگری overwrite نکند.
-  const stateRef = useRef({
-    products: null, rates: null, creditSettings: null, orders: null,
-    cardInfo: null, customers: null, operators: null,
-  });
-  // زمان آخرین ذخیره‌ی محلی؛ برای جلوگیری از این‌که poll دوره‌ای، تغییری را که هنوز به jsonbin
-  // نرسیده (یا هنوز propagate نشده) با نسخه‌ی قدیمی‌تر سرور بازنویسی و پاک کند.
-  const lastPersistAtRef = useRef(0);
 
   useEffect(() => {
     init();
@@ -147,15 +156,11 @@ export default function AfganApp() {
   // show up for everyone without needing a manual refresh.
   useEffect(() => {
     const interval = setInterval(async () => {
-      // اگر همین الان (کمتر از یک بازه‌ی poll) یک ذخیره‌ی محلی انجام شده، این دور از poll را نادیده بگیر
-      // چون ممکن است تغییر هنوز روی jsonbin منعکس نشده باشد و با نسخه‌ی قدیمی‌تر، تغییر تازه پاک شود.
-      if (Date.now() - lastPersistAtRef.current < POLL_INTERVAL_MS) return;
       try {
         const res = await fetch(JSONBIN_URL + "/latest", { headers: { "X-Master-Key": JSONBIN_API_KEY } });
         const data = await res.json();
         const record = data && data.record;
         if (record) {
-          stateRef.current = { ...stateRef.current, ...record };
           setProducts((prev) => (JSON.stringify(prev) !== JSON.stringify(record.products) ? record.products : prev));
           setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
           setCreditSettings((prev) => (JSON.stringify(prev) !== JSON.stringify(record.creditSettings) ? record.creditSettings : prev));
@@ -173,10 +178,14 @@ export default function AfganApp() {
 
   async function init() {
     let record = null;
+    let fetchOk = false;
     try {
       const res = await fetch(JSONBIN_URL + "/latest", { headers: { "X-Master-Key": JSONBIN_API_KEY } });
-      const data = await res.json();
-      record = data && data.record;
+      if (res.ok) {
+        const data = await res.json();
+        record = data && data.record;
+        fetchOk = true;
+      }
     } catch (e) {}
 
     let products = (record && record.products) || [];
@@ -188,26 +197,36 @@ export default function AfganApp() {
     let operators = (record && record.operators) || [];
     let needsSeed = false;
 
-    if (!products.length) {
-      products = DEFAULT_PRODUCTS;
-      needsSeed = true;
-    }
-    if (!rates.length) {
-      rates = DEFAULT_RATES;
-      needsSeed = true;
-    }
-    if (!creditSettings) {
-      creditSettings = DEFAULT_CREDIT_SETTINGS;
-      needsSeed = true;
-    }
-    if (!record || !record.cardInfo) {
-      needsSeed = true;
-    }
-    if (!record || !record.customers) {
-      needsSeed = true;
-    }
-    if (!record || !record.operators) {
-      needsSeed = true;
+    // فقط وقتی خواندن از JSONBin واقعاً موفق بوده (fetchOk) اجازه داریم seed/overwrite کنیم.
+    // اگر درخواست شکست بخورد یا JSONBin محدودیت تعداد درخواست (rate limit) اعمال کند،
+    // نباید داده‌های واقعی موجود روی سرور را با مقادیر پیش‌فرض خالی جایگزین کنیم؛
+    // در آن حالت فقط برای نمایش موقت از پیش‌فرض‌ها استفاده می‌کنیم، بدون نوشتن روی سرور.
+    if (fetchOk) {
+      if (!products.length) {
+        products = DEFAULT_PRODUCTS;
+        needsSeed = true;
+      }
+      if (!rates.length) {
+        rates = DEFAULT_RATES;
+        needsSeed = true;
+      }
+      if (!creditSettings) {
+        creditSettings = DEFAULT_CREDIT_SETTINGS;
+        needsSeed = true;
+      }
+      if (!record || !record.cardInfo) {
+        needsSeed = true;
+      }
+      if (!record || !record.customers) {
+        needsSeed = true;
+      }
+      if (!record || !record.operators) {
+        needsSeed = true;
+      }
+    } else {
+      if (!products.length) products = DEFAULT_PRODUCTS;
+      if (!rates.length) rates = DEFAULT_RATES;
+      if (!creditSettings) creditSettings = DEFAULT_CREDIT_SETTINGS;
     }
 
     if (needsSeed) {
@@ -220,7 +239,6 @@ export default function AfganApp() {
       } catch (e) {}
     }
 
-    stateRef.current = { products, rates, creditSettings, orders, cardInfo, customers, operators };
     setProducts(products);
     setRates(rates);
     setCreditSettings(creditSettings);
@@ -233,65 +251,41 @@ export default function AfganApp() {
 
   async function persist(nextState) {
     try {
-      const res = await fetch(JSONBIN_URL, {
+      await fetch(JSONBIN_URL, {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
         body: JSON.stringify(nextState),
       });
-      if (!res.ok) {
-        showToast("ذخیره‌سازی روی سرور ناموفق بود؛ اتصال اینترنت را بررسی کنید");
-      }
-    } catch (e) {
-      showToast("ذخیره‌سازی روی سرور ناموفق بود؛ اتصال اینترنت را بررسی کنید");
-    }
-  }
-
-  // همه‌ی تغییرات باید از این تابع عبور کنند: هم state محلی را آپدیت می‌کند و هم یک درخواست
-  // ذخیره‌ی واحد (بر پایه‌ی آخرین مقادیر واقعی در stateRef، نه closure بیات) به jsonbin می‌فرستد.
-  // این کار از race condition بین چند saveX پشت‌سرهم که هرکدام کل رکورد را overwrite می‌کنند جلوگیری می‌کند.
-  function updateAndPersist(partial) {
-    const next = { ...stateRef.current, ...partial };
-    stateRef.current = next;
-    lastPersistAtRef.current = Date.now();
-    if ("products" in partial) setProducts(partial.products);
-    if ("rates" in partial) setRates(partial.rates);
-    if ("creditSettings" in partial) setCreditSettings(partial.creditSettings);
-    if ("orders" in partial) setOrders(partial.orders);
-    if ("cardInfo" in partial) setCardInfo(partial.cardInfo);
-    if ("customers" in partial) setCustomers(partial.customers);
-    if ("operators" in partial) setOperators(partial.operators);
-    persist(next);
+    } catch (e) {}
   }
 
   async function saveProducts(next) {
-    updateAndPersist({ products: next });
+    setProducts(next);
+    persist({ products: next, rates, creditSettings, orders, cardInfo, customers, operators });
   }
   async function saveRates(next) {
-    updateAndPersist({ rates: next });
+    setRates(next);
+    persist({ products, rates: next, creditSettings, orders, cardInfo, customers, operators });
   }
   async function saveCreditSettings(next) {
-    updateAndPersist({ creditSettings: next });
+    setCreditSettings(next);
+    persist({ products, rates, creditSettings: next, orders, cardInfo, customers, operators });
   }
   async function saveOrders(next) {
-    updateAndPersist({ orders: next });
+    setOrders(next);
+    persist({ products, rates, creditSettings, orders: next, cardInfo, customers, operators });
   }
   async function saveCardInfo(next) {
-    updateAndPersist({ cardInfo: next });
+    setCardInfo(next);
+    persist({ products, rates, creditSettings, orders, cardInfo: next, customers, operators });
   }
   async function saveCustomers(next) {
-    updateAndPersist({ customers: next });
+    setCustomers(next);
+    persist({ products, rates, creditSettings, orders, cardInfo, customers: next, operators });
   }
   async function saveOperators(next) {
-    updateAndPersist({ operators: next });
-  }
-  // حذف اپراتور و جدا کردن محصولاتش از آن، هر دو در یک درخواست ذخیره‌ی واحد -
-  // تا یکی از دو ذخیره‌ی جداگانه‌ی قبلی، دیگری را overwrite نکند.
-  function removeOperatorAndDetach(op, currentProducts) {
-    const newOperators = (stateRef.current.operators || []).filter((o) => o.id !== op.id);
-    const newProducts = (currentProducts || stateRef.current.products || []).map((p) =>
-      p.operatorId === op.id ? { ...p, operatorId: null } : p
-    );
-    updateAndPersist({ operators: newOperators, products: newProducts });
+    setOperators(next);
+    persist({ products, rates, creditSettings, orders, cardInfo, customers, operators: next });
   }
 
   function showToast(msg) {
@@ -311,15 +305,18 @@ export default function AfganApp() {
       refunded: false,
       ...order,
     };
-    const newOrders = [full, ...(stateRef.current.orders || orders || [])];
-    let newCustomers = stateRef.current.customers || customers;
+    const newOrders = [full, ...(orders || [])];
+    let newCustomers = customers;
     if (currentCustomer && deductAmount) {
-      newCustomers = (newCustomers || []).map((c) =>
+      newCustomers = (customers || []).map((c) =>
         c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - deductAmount } : c
       );
       setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - deductAmount } : prev));
     }
-    updateAndPersist({ orders: newOrders, customers: newCustomers });
+    setOrders(newOrders);
+    setCustomers(newCustomers);
+    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    sendOrderToTelegram(full);
     return full;
   }
 
@@ -327,12 +324,12 @@ export default function AfganApp() {
   // بازگشت داده نشده باشد، مبلغ کسر شده از کیف پول به‌طور خودکار به حساب مشتری برمی‌گردد.
   function updateOrderStatus(order, status) {
     const shouldRefund = status === "cancelled" && !order.refunded && (order.walletDeduction || 0) > 0 && order.customerId;
-    const newOrders = (stateRef.current.orders || orders || []).map((x) =>
+    const newOrders = (orders || []).map((x) =>
       x.id === order.id ? { ...x, status, refunded: x.refunded || shouldRefund } : x
     );
-    let newCustomers = stateRef.current.customers || customers;
+    let newCustomers = customers;
     if (shouldRefund) {
-      newCustomers = (newCustomers || []).map((c) =>
+      newCustomers = (customers || []).map((c) =>
         c.id === order.customerId ? { ...c, wallet: (c.wallet || 0) + order.walletDeduction } : c
       );
       if (currentCustomer && currentCustomer.id === order.customerId) {
@@ -340,7 +337,9 @@ export default function AfganApp() {
       }
       showToast("سفارش لغو شد و مبلغ " + fmt(order.walletDeduction) + " تومان به کیف پول مشتری بازگشت داده شد");
     }
-    updateAndPersist({ orders: newOrders, customers: newCustomers });
+    setOrders(newOrders);
+    setCustomers(newCustomers);
+    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
   }
 
   function requireLogin() {
@@ -544,7 +543,6 @@ export default function AfganApp() {
             saveCardInfo={saveCardInfo}
             saveCustomers={saveCustomers}
             saveOperators={saveOperators}
-            removeOperatorAndDetach={removeOperatorAndDetach}
             onLogout={() => {
               setIsAdmin(false);
               setPage("home");
@@ -1170,7 +1168,7 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
 }
 
 
-function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, removeOperatorAndDetach, onLogout, showToast }) {
+function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -1200,7 +1198,6 @@ function AdminPanel({ products, rates, creditSettings, orders, cardInfo, custome
           operators={operators}
           saveProducts={saveProducts}
           saveOperators={saveOperators}
-          removeOperatorAndDetach={removeOperatorAndDetach}
           creditSettings={creditSettings}
           saveCreditSettings={saveCreditSettings}
           showToast={showToast}
@@ -1391,7 +1388,7 @@ function Dashboard({ orders, products }) {
   );
 }
 
-function ProductsManager({ products, operators, saveProducts, saveOperators, removeOperatorAndDetach, creditSettings, saveCreditSettings, showToast }) {
+function ProductsManager({ products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
   return (
     <div>
       <CategorySection
@@ -1401,7 +1398,6 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, rem
         operators={operators}
         saveProducts={saveProducts}
         saveOperators={saveOperators}
-        removeOperatorAndDetach={removeOperatorAndDetach}
         showToast={showToast}
       />
       <CategorySection
@@ -1411,7 +1407,6 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, rem
         operators={operators}
         saveProducts={saveProducts}
         saveOperators={saveOperators}
-        removeOperatorAndDetach={removeOperatorAndDetach}
         creditSettings={creditSettings}
         saveCreditSettings={saveCreditSettings}
         showToast={showToast}
@@ -1482,7 +1477,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
   );
 }
 
-function CategorySection({ category, label, products, operators, saveProducts, saveOperators, removeOperatorAndDetach, creditSettings, saveCreditSettings, showToast }) {
+function CategorySection({ category, label, products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
   const [newOpName, setNewOpName] = useState("");
   const catOperators = (operators || []).filter((o) => o.category === category);
   const ungrouped = products.filter((p) => p.category === category && !p.operatorId);
@@ -1499,9 +1494,9 @@ function CategorySection({ category, label, products, operators, saveProducts, s
   }
 
   function removeOperator(op) {
-    // detach this operator's products instead of deleting them, so nothing is lost.
-    // both changes are saved together in one request to avoid one overwriting the other.
-    removeOperatorAndDetach(op, products);
+    saveOperators((operators || []).filter((o) => o.id !== op.id));
+    // detach this operator's products instead of deleting them, so nothing is lost
+    saveProducts(products.map((p) => (p.operatorId === op.id ? { ...p, operatorId: null } : p)));
     showToast("اپراتور حذف شد");
   }
 
