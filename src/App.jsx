@@ -83,12 +83,12 @@ function extractNumber(str) {
   const match = normalized.match(/[\d]+(\.[\d]+)?/);
   return match ? parseFloat(match[0]) : null;
 }
-// در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰، رند شده به عدد صحیح.
+// در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰.
 function computeAutoCreditPrice(title, rate) {
   const num = extractNumber(title);
   const r = Number(rate) || 0;
   if (num === null || r <= 0) return null;
-  return Math.round((num / r) * 1000);
+  return Math.round((num / r) * 1000 * 100) / 100;
 }
 // شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
 // و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
@@ -950,9 +950,22 @@ function AdminLogin({ onLogin, onBack }) {
 function CustomerLogin({ customers, onLogin, onBack, showToast }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [isOn, setIsOn] = useState(false);
+  const [pulling, setPulling] = useState(false);
+
+  function pullCord() {
+    if (pulling) return;
+    setPulling(true);
+    setTimeout(() => setIsOn((v) => !v), 90);
+    setTimeout(() => setPulling(false), 220);
+  }
 
   function submit(e) {
     e.preventDefault();
+    if (!isOn) {
+      pullCord();
+      return;
+    }
     const found = (customers || []).find((c) => c.username === username.trim() && c.password === password);
     if (found) {
       onLogin(found);
@@ -964,16 +977,42 @@ function CustomerLogin({ customers, onLogin, onBack, showToast }) {
   return (
     <div className="fade-in">
       <PageHeader title="ورود مشتری" icon="👤" onBack={onBack} />
-      <form className="order-form" onSubmit={submit}>
-        <label>
+
+      <div className="lamp-login">
+        <div className={`lamp-scene${isOn ? " on" : ""}`}>
+          <div className="lamp-glow" />
+          <div className="lamp-shade" />
+          <div
+            className={`lamp-cord${pulling ? " pulling" : ""}`}
+            onClick={pullCord}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              pullCord();
+            }}
+            role="button"
+            aria-label={isOn ? "خاموش کردن لامپ" : "روشن کردن لامپ"}
+          >
+            <div className="lamp-string" />
+            <div className="lamp-knob" />
+          </div>
+          <div className="lamp-pole" />
+          <div className="lamp-base" />
+        </div>
+        <div className="lamp-hint">
+          {isOn ? "نخ رو دوباره بکش تا خاموش بشه" : "برای ورود، نخ کنار لامپ رو بکش"}
+        </div>
+      </div>
+
+      <form className={`order-form lamp-fields${isOn ? " on" : ""}`} onSubmit={submit} style={{ marginTop: 10 }}>
+        <label className="field-group">
           نام کاربری
-          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="نام کاربری" />
+          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="نام کاربری" tabIndex={isOn ? 0 : -1} />
         </label>
-        <label>
+        <label className="field-group">
           رمز عبور
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="رمز عبور" type="password" />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="رمز عبور" type="password" tabIndex={isOn ? 0 : -1} />
         </label>
-        <div className="form-btn-row">
+        <div className="form-btn-row lamp-submit-row">
           <button type="submit" className="btn-primary full">
             ورود
           </button>
@@ -1358,7 +1397,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
         )}
         {current.mode === "auto" && (
           <div className="hint-text" style={{ textAlign: "right" }}>
-            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم، سپس در ۱۰۰۰ ضرب و به عدد صحیح رند می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
+            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم و سپس در ۱۰۰۰ ضرب می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
           </div>
         )}
       </div>
@@ -1967,6 +2006,53 @@ function Style() {
         background: var(--primary-dark); color: #fff; padding: 12px 20px; border-radius: 14px;
         font-size: 13px; box-shadow: 0 8px 20px rgba(0,0,0,0.25); z-index: 50; max-width: 90%; text-align: center;
       }
+
+      /* ===== Lamp pull-cord login ===== */
+      .lamp-login { display: flex; flex-direction: column; align-items: center; padding: 6px 0 4px; }
+      .lamp-scene { position: relative; height: 148px; display: flex; flex-direction: column; align-items: center; }
+      .lamp-glow {
+        position: absolute; top: -34px; width: 260px; height: 260px; border-radius: 50%;
+        background: radial-gradient(circle, var(--accent-soft) 0%, rgba(201,151,58,0.18) 45%, transparent 72%);
+        opacity: 0; transition: opacity .6s ease; pointer-events: none; filter: blur(1px);
+      }
+      .lamp-scene.on .lamp-glow { opacity: 1; }
+      .lamp-shade {
+        width: 104px; height: 52px; border-radius: 104px 104px 6px 6px;
+        background: linear-gradient(180deg, #cfc9b8, #a9a290);
+        transition: background .5s ease, box-shadow .5s ease; position: relative; z-index: 2;
+      }
+      .lamp-scene.on .lamp-shade {
+        background: linear-gradient(180deg, #ffe9ae, var(--accent));
+        box-shadow: 0 10px 36px 4px rgba(201,151,58,0.55);
+      }
+      .lamp-pole { width: 7px; height: 62px; background: var(--primary-dark); z-index: 1; }
+      .lamp-base { width: 64px; height: 9px; border-radius: 4px; background: var(--primary-dark); z-index: 1; }
+      .lamp-cord {
+        position: absolute; top: 50px; right: 28%; width: 16px; height: 54px; z-index: 4;
+        cursor: grab; display: flex; justify-content: center;
+      }
+      .lamp-cord:active { cursor: grabbing; }
+      .lamp-cord .lamp-string { width: 2px; height: 36px; background: #9c9686; transition: height .18s ease; }
+      .lamp-cord .lamp-knob {
+        position: absolute; bottom: -6px; width: 9px; height: 9px; border-radius: 50%;
+        background: var(--accent); transition: bottom .18s ease;
+      }
+      .lamp-cord.pulling .lamp-string { height: 54px; }
+      .lamp-cord.pulling .lamp-knob { bottom: -24px; }
+      .lamp-hint { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+      .lamp-fields .field-group {
+        max-height: 0; opacity: 0; overflow: hidden; transform: translateY(6px);
+        transition: max-height .5s ease, opacity .5s ease, transform .5s ease, margin .5s ease;
+      }
+      .lamp-fields.on .field-group { max-height: 90px; opacity: 1; transform: translateY(0); margin-bottom: 14px; }
+      .lamp-fields .field-group:nth-of-type(1) { transition-delay: .12s; }
+      .lamp-fields .field-group:nth-of-type(2) { transition-delay: .26s; }
+      .lamp-fields .lamp-submit-row {
+        max-height: 0; opacity: 0; overflow: hidden;
+        transition: max-height .45s ease .4s, opacity .45s ease .4s;
+      }
+      .lamp-fields.on .lamp-submit-row { max-height: 60px; opacity: 1; }
     `}</style>
   );
 }
