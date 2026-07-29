@@ -36,6 +36,7 @@ function buildInvoiceText(order) {
     lines.push("مبلغ: " + fmt(order.price) + " " + (CURRENCY_LABELS[order.currency || "TOMAN"] || ""));
   }
   lines.push("نام مشتری: " + (order.customerName || "—"));
+  if (order.customerUsername) lines.push("یوزرنیم مشتری: @" + order.customerUsername);
   lines.push("شماره تماس: " + (order.phone || "—"));
   lines.push("کد پیگیری: " + (order.trackingCode || "—"));
   return lines.join("\n");
