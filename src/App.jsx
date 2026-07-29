@@ -544,6 +544,7 @@ export default function AfganApp() {
             saveCardInfo={saveCardInfo}
             saveCustomers={saveCustomers}
             saveOperators={saveOperators}
+            removeOperatorAndDetach={removeOperatorAndDetach}
             onLogout={() => {
               setIsAdmin(false);
               setPage("home");
@@ -1169,7 +1170,7 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
 }
 
 
-function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
+function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, removeOperatorAndDetach, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
