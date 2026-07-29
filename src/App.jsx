@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 const ADMIN_EMAIL = "mahdisultani10@gmail.com";
 const ADMIN_PASSWORD = "Mahdi35";
@@ -115,6 +115,16 @@ export default function AfganApp() {
   const [adminTab, setAdminTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
 
+  // همیشه آخرین نسخه‌ی کامل داده‌ها را نگه می‌دارد (بر خلاف state که به‌روزرسانی‌اش async است)
+  // تا وقتی چند تغییر پشت سر هم ذخیره می‌شوند، هرکدام روی نسخه‌ی قدیمی/بیات دیگری overwrite نکند.
+  const stateRef = useRef({
+    products: null, rates: null, creditSettings: null, orders: null,
+    cardInfo: null, customers: null, operators: null,
+  });
+  // زمان آخرین ذخیره‌ی محلی؛ برای جلوگیری از این‌که poll دوره‌ای، تغییری را که هنوز به jsonbin
+  // نرسیده (یا هنوز propagate نشده) با نسخه‌ی قدیمی‌تر سرور بازنویسی و پاک کند.
+  const lastPersistAtRef = useRef(0);
+
   useEffect(() => {
     init();
   }, []);
@@ -137,11 +147,15 @@ export default function AfganApp() {
   // show up for everyone without needing a manual refresh.
   useEffect(() => {
     const interval = setInterval(async () => {
+      // اگر همین الان (کمتر از یک بازه‌ی poll) یک ذخیره‌ی محلی انجام شده، این دور از poll را نادیده بگیر
+      // چون ممکن است تغییر هنوز روی jsonbin منعکس نشده باشد و با نسخه‌ی قدیمی‌تر، تغییر تازه پاک شود.
+      if (Date.now() - lastPersistAtRef.current < POLL_INTERVAL_MS) return;
       try {
         const res = await fetch(JSONBIN_URL + "/latest", { headers: { "X-Master-Key": JSONBIN_API_KEY } });
         const data = await res.json();
         const record = data && data.record;
         if (record) {
+          stateRef.current = { ...stateRef.current, ...record };
           setProducts((prev) => (JSON.stringify(prev) !== JSON.stringify(record.products) ? record.products : prev));
           setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
           setCreditSettings((prev) => (JSON.stringify(prev) !== JSON.stringify(record.creditSettings) ? record.creditSettings : prev));
@@ -206,6 +220,7 @@ export default function AfganApp() {
       } catch (e) {}
     }
 
+    stateRef.current = { products, rates, creditSettings, orders, cardInfo, customers, operators };
     setProducts(products);
     setRates(rates);
     setCreditSettings(creditSettings);
@@ -218,41 +233,65 @@ export default function AfganApp() {
 
   async function persist(nextState) {
     try {
-      await fetch(JSONBIN_URL, {
+      const res = await fetch(JSONBIN_URL, {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
         body: JSON.stringify(nextState),
       });
-    } catch (e) {}
+      if (!res.ok) {
+        showToast("ذخیره‌سازی روی سرور ناموفق بود؛ اتصال اینترنت را بررسی کنید");
+      }
+    } catch (e) {
+      showToast("ذخیره‌سازی روی سرور ناموفق بود؛ اتصال اینترنت را بررسی کنید");
+    }
+  }
+
+  // همه‌ی تغییرات باید از این تابع عبور کنند: هم state محلی را آپدیت می‌کند و هم یک درخواست
+  // ذخیره‌ی واحد (بر پایه‌ی آخرین مقادیر واقعی در stateRef، نه closure بیات) به jsonbin می‌فرستد.
+  // این کار از race condition بین چند saveX پشت‌سرهم که هرکدام کل رکورد را overwrite می‌کنند جلوگیری می‌کند.
+  function updateAndPersist(partial) {
+    const next = { ...stateRef.current, ...partial };
+    stateRef.current = next;
+    lastPersistAtRef.current = Date.now();
+    if ("products" in partial) setProducts(partial.products);
+    if ("rates" in partial) setRates(partial.rates);
+    if ("creditSettings" in partial) setCreditSettings(partial.creditSettings);
+    if ("orders" in partial) setOrders(partial.orders);
+    if ("cardInfo" in partial) setCardInfo(partial.cardInfo);
+    if ("customers" in partial) setCustomers(partial.customers);
+    if ("operators" in partial) setOperators(partial.operators);
+    persist(next);
   }
 
   async function saveProducts(next) {
-    setProducts(next);
-    persist({ products: next, rates, creditSettings, orders, cardInfo, customers, operators });
+    updateAndPersist({ products: next });
   }
   async function saveRates(next) {
-    setRates(next);
-    persist({ products, rates: next, creditSettings, orders, cardInfo, customers, operators });
+    updateAndPersist({ rates: next });
   }
   async function saveCreditSettings(next) {
-    setCreditSettings(next);
-    persist({ products, rates, creditSettings: next, orders, cardInfo, customers, operators });
+    updateAndPersist({ creditSettings: next });
   }
   async function saveOrders(next) {
-    setOrders(next);
-    persist({ products, rates, creditSettings, orders: next, cardInfo, customers, operators });
+    updateAndPersist({ orders: next });
   }
   async function saveCardInfo(next) {
-    setCardInfo(next);
-    persist({ products, rates, creditSettings, orders, cardInfo: next, customers, operators });
+    updateAndPersist({ cardInfo: next });
   }
   async function saveCustomers(next) {
-    setCustomers(next);
-    persist({ products, rates, creditSettings, orders, cardInfo, customers: next, operators });
+    updateAndPersist({ customers: next });
   }
   async function saveOperators(next) {
-    setOperators(next);
-    persist({ products, rates, creditSettings, orders, cardInfo, customers, operators: next });
+    updateAndPersist({ operators: next });
+  }
+  // حذف اپراتور و جدا کردن محصولاتش از آن، هر دو در یک درخواست ذخیره‌ی واحد -
+  // تا یکی از دو ذخیره‌ی جداگانه‌ی قبلی، دیگری را overwrite نکند.
+  function removeOperatorAndDetach(op, currentProducts) {
+    const newOperators = (stateRef.current.operators || []).filter((o) => o.id !== op.id);
+    const newProducts = (currentProducts || stateRef.current.products || []).map((p) =>
+      p.operatorId === op.id ? { ...p, operatorId: null } : p
+    );
+    updateAndPersist({ operators: newOperators, products: newProducts });
   }
 
   function showToast(msg) {
@@ -272,17 +311,15 @@ export default function AfganApp() {
       refunded: false,
       ...order,
     };
-    const newOrders = [full, ...(orders || [])];
-    let newCustomers = customers;
+    const newOrders = [full, ...(stateRef.current.orders || orders || [])];
+    let newCustomers = stateRef.current.customers || customers;
     if (currentCustomer && deductAmount) {
-      newCustomers = (customers || []).map((c) =>
+      newCustomers = (newCustomers || []).map((c) =>
         c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - deductAmount } : c
       );
       setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - deductAmount } : prev));
     }
-    setOrders(newOrders);
-    setCustomers(newCustomers);
-    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    updateAndPersist({ orders: newOrders, customers: newCustomers });
     return full;
   }
 
@@ -290,12 +327,12 @@ export default function AfganApp() {
   // بازگشت داده نشده باشد، مبلغ کسر شده از کیف پول به‌طور خودکار به حساب مشتری برمی‌گردد.
   function updateOrderStatus(order, status) {
     const shouldRefund = status === "cancelled" && !order.refunded && (order.walletDeduction || 0) > 0 && order.customerId;
-    const newOrders = (orders || []).map((x) =>
+    const newOrders = (stateRef.current.orders || orders || []).map((x) =>
       x.id === order.id ? { ...x, status, refunded: x.refunded || shouldRefund } : x
     );
-    let newCustomers = customers;
+    let newCustomers = stateRef.current.customers || customers;
     if (shouldRefund) {
-      newCustomers = (customers || []).map((c) =>
+      newCustomers = (newCustomers || []).map((c) =>
         c.id === order.customerId ? { ...c, wallet: (c.wallet || 0) + order.walletDeduction } : c
       );
       if (currentCustomer && currentCustomer.id === order.customerId) {
@@ -303,9 +340,7 @@ export default function AfganApp() {
       }
       showToast("سفارش لغو شد و مبلغ " + fmt(order.walletDeduction) + " تومان به کیف پول مشتری بازگشت داده شد");
     }
-    setOrders(newOrders);
-    setCustomers(newCustomers);
-    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    updateAndPersist({ orders: newOrders, customers: newCustomers });
   }
 
   function requireLogin() {
@@ -1164,6 +1199,7 @@ function AdminPanel({ products, rates, creditSettings, orders, cardInfo, custome
           operators={operators}
           saveProducts={saveProducts}
           saveOperators={saveOperators}
+          removeOperatorAndDetach={removeOperatorAndDetach}
           creditSettings={creditSettings}
           saveCreditSettings={saveCreditSettings}
           showToast={showToast}
@@ -1354,7 +1390,7 @@ function Dashboard({ orders, products }) {
   );
 }
 
-function ProductsManager({ products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
+function ProductsManager({ products, operators, saveProducts, saveOperators, removeOperatorAndDetach, creditSettings, saveCreditSettings, showToast }) {
   return (
     <div>
       <CategorySection
@@ -1364,6 +1400,7 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, cre
         operators={operators}
         saveProducts={saveProducts}
         saveOperators={saveOperators}
+        removeOperatorAndDetach={removeOperatorAndDetach}
         showToast={showToast}
       />
       <CategorySection
@@ -1373,6 +1410,7 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, cre
         operators={operators}
         saveProducts={saveProducts}
         saveOperators={saveOperators}
+        removeOperatorAndDetach={removeOperatorAndDetach}
         creditSettings={creditSettings}
         saveCreditSettings={saveCreditSettings}
         showToast={showToast}
@@ -1443,7 +1481,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
   );
 }
 
-function CategorySection({ category, label, products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
+function CategorySection({ category, label, products, operators, saveProducts, saveOperators, removeOperatorAndDetach, creditSettings, saveCreditSettings, showToast }) {
   const [newOpName, setNewOpName] = useState("");
   const catOperators = (operators || []).filter((o) => o.category === category);
   const ungrouped = products.filter((p) => p.category === category && !p.operatorId);
@@ -1460,9 +1498,9 @@ function CategorySection({ category, label, products, operators, saveProducts, s
   }
 
   function removeOperator(op) {
-    saveOperators((operators || []).filter((o) => o.id !== op.id));
-    // detach this operator's products instead of deleting them, so nothing is lost
-    saveProducts(products.map((p) => (p.operatorId === op.id ? { ...p, operatorId: null } : p)));
+    // detach this operator's products instead of deleting them, so nothing is lost.
+    // both changes are saved together in one request to avoid one overwriting the other.
+    removeOperatorAndDetach(op, products);
     showToast("اپراتور حذف شد");
   }
 
