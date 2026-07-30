@@ -3,11 +3,11 @@ import React, { useState, useEffect } from "react";
 const ADMIN_EMAIL = "mahdisultani10@gmail.com";
 const ADMIN_PASSWORD = "Mahdi35";
 
-// ====== JSONBIN CONFIG ======
-const JSONBIN_BIN_ID = "6a668a3cf5f4af5e29c50f2c";
-const JSONBIN_API_KEY = "$2a$10$M4JrqWL2WXu2iu2baYsD2ujKh0p6P3WYBM2umsli.oE4d95F8ZadO";
-const JSONBIN_URL = "https://api.jsonbin.io/v3/b/" + JSONBIN_BIN_ID;
-const POLL_INTERVAL_MS = 20000; // how often the app re-checks jsonbin for changes made by others
+// ====== DATA STORAGE CONFIG ======
+// داده‌های اپ از طریق فانکشن نتلیفای (netlify/functions/data.js) در Netlify Blobs
+// ذخیره و بازیابی می‌شوند. نیازی به هیچ کلید API‌ای در فرانت‌اند نیست.
+const DATA_URL = "/.netlify/functions/data";
+const POLL_INTERVAL_MS = 20000; // how often the app re-checks for changes made by others
 // ==============================
 
 const DEFAULT_PRODUCTS = [
@@ -153,12 +153,12 @@ export default function AfganApp() {
     }
   }, [loaded, customers]);
 
-  // Periodically re-check jsonbin so changes made by the admin (or other customers)
+  // Periodically re-check the data store so changes made by the admin (or other customers)
   // show up for everyone without needing a manual refresh.
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(JSONBIN_URL + "/latest", { headers: { "X-Master-Key": JSONBIN_API_KEY } });
+        const res = await fetch(DATA_URL);
         const data = await res.json();
         const record = data && data.record;
         if (record) {
@@ -181,7 +181,7 @@ export default function AfganApp() {
     let record = null;
     let fetchOk = false;
     try {
-      const res = await fetch(JSONBIN_URL + "/latest", { headers: { "X-Master-Key": JSONBIN_API_KEY } });
+      const res = await fetch(DATA_URL);
       if (res.ok) {
         const data = await res.json();
         record = data && data.record;
@@ -232,9 +232,9 @@ export default function AfganApp() {
 
     if (needsSeed) {
       try {
-        await fetch(JSONBIN_URL, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
+        await fetch(DATA_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ products, rates, creditSettings, orders, cardInfo, customers, operators }),
         });
       } catch (e) {}
@@ -252,9 +252,9 @@ export default function AfganApp() {
 
   async function persist(nextState) {
     try {
-      await fetch(JSONBIN_URL, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
+      await fetch(DATA_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(nextState),
       });
     } catch (e) {}
