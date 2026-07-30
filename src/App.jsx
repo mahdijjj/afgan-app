@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 const ADMIN_EMAIL = "mahdisultani10@gmail.com";
 const ADMIN_PASSWORD = "Mahdi35";
@@ -134,6 +134,13 @@ export default function AfganApp() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminTab, setAdminTab] = useState("dashboard");
   const [toast, setToast] = useState(null);
+  // اگر چند ذخیره‌سازی (مثلاً افزودن چند محصول پشت سر هم) خیلی سریع اتفاق بیفتد، درخواست‌های
+  // شبکه‌ی آن‌ها ممکن است هم‌زمان ارسال شوند و به ترتیب نامشخصی به سرور برسند؛ در آن حالت آخرین
+  // درخواستی که به سرور می‌رسد (نه لزوماً آخرین چیزی که کاربر ثبت کرده) برنده می‌شود و باعث
+  // می‌شود بعضی از موارد ثبت‌شده گم شوند. برای جلوگیری از این مشکل، درخواست‌های ذخیره‌سازی را
+  // در یک صف قرار می‌دهیم تا هر کدام قبل از شروع بعدی، کامل تمام شود.
+  const persistChainRef = useRef(Promise.resolve());
+  const pendingWritesRef = useRef(0);
 
   useEffect(() => {
     init();
@@ -157,6 +164,9 @@ export default function AfganApp() {
   // show up for everyone without needing a manual refresh.
   useEffect(() => {
     const interval = setInterval(async () => {
+      // اگر یک ذخیره‌سازی محلی هنوز در حال ارسال به سرور است، از این دور بررسی صرف‌نظر می‌کنیم
+      // تا داده‌ی قدیمی‌تر سرور، تغییرات تازه‌ی کاربر را که هنوز کامل ثبت نشده پاک نکند.
+      if (pendingWritesRef.current > 0) return;
       try {
         const res = await fetch(DATA_URL);
         const data = await res.json();
@@ -251,13 +261,22 @@ export default function AfganApp() {
   }
 
   async function persist(nextState) {
-    try {
-      await fetch(DATA_URL, {
+    pendingWritesRef.current += 1;
+    const run = () =>
+      fetch(DATA_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(nextState),
-      });
-    } catch (e) {}
+      })
+        .catch(() => {})
+        .finally(() => {
+          pendingWritesRef.current -= 1;
+        });
+    // با زنجیره‌کردن روی نتیجه‌ی درخواست قبلی، هر درخواست ذخیره‌سازی جدید فقط بعد از
+    // تمام‌شدنِ درخواست قبلی ارسال می‌شود - یعنی همیشه به همان ترتیبی که کاربر ثبت کرده،
+    // روی سرور نوشته می‌شوند و هیچ‌کدام گم نمی‌شوند.
+    persistChainRef.current = persistChainRef.current.then(run);
+    return persistChainRef.current;
   }
 
   async function saveProducts(next) {
@@ -1209,7 +1228,7 @@ function AdminPanel({ products, rates, creditSettings, orders, cardInfo, custome
       )}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
       {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
-      {tab === "customers" && <CustomersManager customers={customers} saveCustomers={saveCustomers} showToast={showToast} />}
+      {tab === "customers" && <CustomersManager customers={customers} orders={orders} saveCustomers={saveCustomers} showToast={showToast} />}
     </div>
   );
 }
@@ -1257,10 +1276,11 @@ function CardManager({ cardInfo, saveCardInfo, showToast }) {
   );
 }
 
-function CustomersManager({ customers, saveCustomers, showToast }) {
+function CustomersManager({ customers, orders, saveCustomers, showToast }) {
   const [newCust, setNewCust] = useState({ username: "", password: "", name: "", wallet: "" });
   const [editingWallet, setEditingWallet] = useState(null);
   const [walletDraft, setWalletDraft] = useState("");
+  const [expandedCustomer, setExpandedCustomer] = useState(null);
 
   function addCustomer() {
     if (!newCust.username.trim() || !newCust.password.trim()) {
@@ -1318,39 +1338,92 @@ function CustomersManager({ customers, saveCustomers, showToast }) {
         <span>لیست مشتریان ثبت‌شده ({(customers || []).length})</span>
       </div>
       {(!customers || customers.length === 0) && <div className="empty-state">هنوز مشتری‌ای ثبت نشده است.</div>}
-      {(customers || []).map((c) => (
-        <div className="admin-product-row" key={c.id}>
-          <div className="product-info">
-            <div className="product-title">{c.name}</div>
-            <div className="product-subtitle">نام کاربری: {c.username}</div>
-          </div>
-          <div className="product-actions">
-            {editingWallet === c.id ? (
-              <>
-                <input
-                  type="number"
-                  value={walletDraft}
-                  onChange={(e) => setWalletDraft(e.target.value)}
-                  style={{ width: 90, padding: "8px 10px", borderRadius: 10, border: "1px solid #e2ddce" }}
-                />
-                <button className="btn-primary small" onClick={() => saveWallet(c)}>
-                  ذخیره
+      {(customers || []).map((c) => {
+        const custOrders = (orders || []).filter((o) => o.customerId === c.id);
+        const isExpanded = expandedCustomer === c.id;
+        return (
+          <div className="admin-product-row" key={c.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", flexWrap: "wrap", gap: 8 }}>
+              <div
+                className="product-info"
+                onClick={() => setExpandedCustomer(isExpanded ? null : c.id)}
+                style={{ cursor: "pointer" }}
+              >
+                <div className="product-title">
+                  {c.name} <span className="hint-text">({custOrders.length} سفارش) {isExpanded ? "▲" : "▼"}</span>
+                </div>
+                <div className="product-subtitle">نام کاربری: {c.username}</div>
+              </div>
+              <div className="product-actions">
+                {editingWallet === c.id ? (
+                  <>
+                    <input
+                      type="number"
+                      value={walletDraft}
+                      onChange={(e) => setWalletDraft(e.target.value)}
+                      style={{ width: 90, padding: "8px 10px", borderRadius: 10, border: "1px solid #e2ddce" }}
+                    />
+                    <button className="btn-primary small" onClick={() => saveWallet(c)}>
+                      ذخیره
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="product-price">{fmt(c.wallet || 0)} تومان</div>
+                    <button className="btn-ghost small" onClick={() => startWalletEdit(c)}>
+                      ویرایش کیف پول
+                    </button>
+                  </>
+                )}
+                <button className="btn-danger small" onClick={() => removeCustomer(c)}>
+                  حذف
                 </button>
-              </>
-            ) : (
-              <>
-                <div className="product-price">{fmt(c.wallet || 0)} تومان</div>
-                <button className="btn-ghost small" onClick={() => startWalletEdit(c)}>
-                  ویرایش کیف پول
-                </button>
-              </>
+              </div>
+            </div>
+            {isExpanded && (
+              <div style={{ width: "100%", marginTop: 10 }}>
+                {custOrders.length === 0 && <div className="empty-state">این مشتری هنوز سفارشی ثبت نکرده است.</div>}
+                {custOrders.map((o) => (
+                  <div className="admin-order-row" key={o.id}>
+                    <div className="admin-order-top">
+                      <span>
+                        {TYPE_ICONS[o.type]} {o.item}
+                      </span>
+                      <span className="order-card-price">
+                        {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
+                      </span>
+                    </div>
+                    <div className="admin-order-meta">
+                      <span>{TYPE_LABELS[o.type]}</span>
+                      <span>کد: {o.trackingCode}</span>
+                      <span>{fmtDate(o.date)}</span>
+                      <span className={"status-pill active status-" + o.status} style={{ pointerEvents: "none" }}>
+                        {STATUS_LABELS[o.status]}
+                      </span>
+                    </div>
+                    <div className="admin-order-detail">
+                      {o.subtitle && <div>توضیحات بسته: {o.subtitle}</div>}
+                      {o.operatorName && <div>اپراتور: {o.operatorName}</div>}
+                      {o.type === "remittance" && (
+                        <>
+                          <div>گیرنده: {o.receiverName}</div>
+                          <div>مقصد: {o.destination}</div>
+                          {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
+                          {o.notes && <div>توضیحات: {o.notes}</div>}
+                        </>
+                      )}
+                      {o.type !== "remittance" && !!o.walletDeduction && (
+                        <div>مبلغ کسر شده از کیف پول: {fmt(o.walletDeduction)} تومان</div>
+                      )}
+                      {o.refunded && <div>✅ مبلغ این سفارش به کیف پول مشتری بازگشت داده شده است</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-            <button className="btn-danger small" onClick={() => removeCustomer(c)}>
-              حذف
-            </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1416,7 +1489,9 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, cre
   );
 }
 
-// تنظیمات روش قیمت‌گذاری بخش شارژ تماس: انتخاب دستی/خودکار و تعیین نرخ برای روش خودکار.
+// تنظیمات روش قیمت‌گذاری عمومی بخش شارژ تماس: فقط برای محصولاتی که به هیچ اپراتوری
+// متصل نیستند کاربرد دارد. هر اپراتور تنظیمات قیمت‌گذاری مخصوص به خودش را دارد
+// (داخل بلوک همان اپراتور در OperatorProducts).
 function CreditPricingSettings({ creditSettings, saveCreditSettings, products, saveProducts, showToast }) {
   const current = creditSettings || DEFAULT_CREDIT_SETTINGS;
   const [rateDraft, setRateDraft] = useState(current.rate || "");
@@ -1431,7 +1506,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, products, s
     showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار فعال شد" : "روش قیمت‌گذاری دستی فعال شد");
   }
 
-  // با تعیین نرخ جدید، علاوه بر ذخیره‌ی نرخ، قیمت تمام محصولات موجود «شارژ تماس» نیز
+  // با تعیین نرخ جدید، علاوه بر ذخیره‌ی نرخ، قیمت محصولاتِ بدون اپراتورِ «شارژ تماس»
   // بر اساس عدد فیلد عنوان هرکدام و نرخ تازه، دوباره محاسبه و به‌روزرسانی می‌شود.
   function saveRate() {
     const rate = Number(rateDraft) || 0;
@@ -1442,7 +1517,7 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, products, s
     saveCreditSettings({ ...current, rate });
     if (products && saveProducts) {
       const updated = products.map((p) => {
-        if (p.category !== "credit") return p;
+        if (p.category !== "credit" || p.operatorId) return p;
         const computed = computeAutoCreditPrice(p.title, rate);
         return computed !== null ? { ...p, price: computed } : p;
       });
@@ -1454,9 +1529,13 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, products, s
   return (
     <div className="operator-block">
       <div className="operator-block-header">
-        <span>⚙️ تعیین نرخ و روش قیمت‌گذاری</span>
+        <span>⚙️ قیمت‌گذاری محصولات بدون اپراتور</span>
       </div>
       <div className="operator-block-body">
+        <div className="hint-text" style={{ textAlign: "right", marginBottom: 8 }}>
+          این تنظیمات فقط روی محصولاتی که به هیچ اپراتوری متصل نیستند اثر می‌گذارد. برای هر اپراتور،
+          روش قیمت‌گذاری از داخل بلوک همان اپراتور به‌طور جداگانه تعیین می‌شود.
+        </div>
         <div className="status-row" style={{ marginBottom: 10 }}>
           <button className={"status-pill" + (current.mode === "manual" ? " active status-completed" : "")} onClick={() => setMode("manual")}>
             قیمت‌گذاری دستی
@@ -1538,6 +1617,8 @@ function CategorySection({ category, label, products, operators, saveProducts, s
           category={category}
           products={products}
           saveProducts={saveProducts}
+          operators={operators}
+          saveOperators={saveOperators}
           creditSettings={creditSettings}
           onRemoveOperator={() => removeOperator(op)}
           showToast={showToast}
@@ -1550,17 +1631,73 @@ function CategorySection({ category, label, products, operators, saveProducts, s
   );
 }
 
-function OperatorProducts({ operator, category, products, saveProducts, creditSettings, onRemoveOperator, showToast }) {
+function OperatorProducts({ operator, category, products, saveProducts, operators, saveOperators, creditSettings, onRemoveOperator, showToast }) {
   const [open, setOpen] = useState(true);
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
   const [newProd, setNewProd] = useState({ title: "", subtitle: "", price: "", currency: "TOMAN" });
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(operator ? operator.name : "");
+  const [rateDraft, setRateDraft] = useState(operator ? operator.pricingRate || "" : "");
 
-  // قیمت‌گذاری خودکار فقط برای دسته «شارژ تماس» و وقتی مدیر نرخ را تعیین و روش خودکار را فعال کرده باشد اعمال می‌شود.
-  const autoPricing = category === "credit" && creditSettings && creditSettings.mode === "auto" && Number(creditSettings.rate) > 0;
+  // اگر اپراتور از بیرون تغییر کند (مثلاً از طریق poll دیگری)، مقادیر ویرایش را همگام نگه می‌داریم.
+  useEffect(() => {
+    if (operator) {
+      setNameDraft(operator.name);
+      setRateDraft(operator.pricingRate || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operator && operator.name, operator && operator.pricingRate]);
+
+  // برای دسته «شارژ تماس»: اگر محصول به یک اپراتور متصل باشد، روش و نرخ قیمت‌گذاریِ همان اپراتور
+  // استفاده می‌شود؛ برای محصولات بدون اپراتور، تنظیمات عمومی (creditSettings) به کار می‌رود.
+  const operatorPricingMode = operator ? operator.pricingMode || "manual" : (creditSettings || DEFAULT_CREDIT_SETTINGS).mode;
+  const operatorPricingRate = operator ? Number(operator.pricingRate) || 0 : Number((creditSettings || DEFAULT_CREDIT_SETTINGS).rate) || 0;
+  const autoPricing = category === "credit" && operatorPricingMode === "auto" && operatorPricingRate > 0;
 
   const list = products.filter((p) => p.category === category && (operator ? p.operatorId === operator.id : !p.operatorId));
+
+  function updateOperator(patch) {
+    saveOperators((operators || []).map((o) => (o.id === operator.id ? { ...o, ...patch } : o)));
+  }
+
+  function setOperatorMode(mode) {
+    updateOperator({ pricingMode: mode });
+    showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار برای این اپراتور فعال شد" : "روش قیمت‌گذاری دستی برای این اپراتور فعال شد");
+  }
+
+  // با تعیین نرخ جدید برای این اپراتور، قیمت محصولات موجود همین اپراتور نیز
+  // بر اساس عدد فیلد عنوان هرکدام و نرخ تازه، دوباره محاسبه و به‌روزرسانی می‌شود.
+  function saveOperatorRate() {
+    const rate = Number(rateDraft) || 0;
+    if (rate <= 0) {
+      showToast("نرخ معتبر وارد کنید");
+      return;
+    }
+    updateOperator({ pricingRate: rate });
+    const updated = products.map((p) => {
+      if (p.category !== "credit" || p.operatorId !== operator.id) return p;
+      const computed = computeAutoCreditPrice(p.title, rate);
+      return computed !== null ? { ...p, price: computed } : p;
+    });
+    saveProducts(updated);
+    showToast("نرخ ذخیره شد و قیمت‌های این اپراتور به‌روزرسانی شدند");
+  }
+
+  function startEditName() {
+    setNameDraft(operator.name);
+    setEditingName(true);
+  }
+  function saveOperatorName() {
+    if (!nameDraft.trim()) {
+      showToast("نام اپراتور را وارد کنید");
+      return;
+    }
+    updateOperator({ name: nameDraft.trim() });
+    setEditingName(false);
+    showToast("نام اپراتور به‌روزرسانی شد");
+  }
 
   function startEdit(p) {
     setEditing(p.id);
@@ -1607,7 +1744,7 @@ function OperatorProducts({ operator, category, products, saveProducts, creditSe
     setNewProd((n) => {
       const next = { ...n, title };
       if (autoPricing) {
-        const computed = computeAutoCreditPrice(title, creditSettings.rate);
+        const computed = computeAutoCreditPrice(title, operatorPricingRate);
         if (computed !== null) next.price = String(computed);
       }
       return next;
@@ -1618,7 +1755,7 @@ function OperatorProducts({ operator, category, products, saveProducts, creditSe
     setDraft((d) => {
       const next = { ...d, title };
       if (autoPricing) {
-        const computed = computeAutoCreditPrice(title, creditSettings.rate);
+        const computed = computeAutoCreditPrice(title, operatorPricingRate);
         if (computed !== null) next.price = String(computed);
       }
       return next;
@@ -1628,8 +1765,20 @@ function OperatorProducts({ operator, category, products, saveProducts, creditSe
   return (
     <div className="operator-block">
       <div className="operator-block-header" onClick={() => setOpen(!open)}>
-        <span>{operator ? "📡 " + operator.name : "سایر محصولات (بدون اپراتور)"}</span>
-        <span>{open ? "▲" : "▼"}</span>
+        {editingName ? (
+          <div className="add-form" onClick={(e) => e.stopPropagation()} style={{ margin: 0, flex: 1 }}>
+            <input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder="نام اپراتور" />
+            <button className="btn-primary small" onClick={saveOperatorName}>
+              ذخیره
+            </button>
+            <button className="btn-ghost small" onClick={() => setEditingName(false)}>
+              انصراف
+            </button>
+          </div>
+        ) : (
+          <span>{operator ? "📡 " + operator.name : "سایر محصولات (بدون اپراتور)"}</span>
+        )}
+        {!editingName && <span>{open ? "▲" : "▼"}</span>}
       </div>
       {open && (
         <div className="operator-block-body">
@@ -1645,6 +1794,17 @@ function OperatorProducts({ operator, category, products, saveProducts, creditSe
             </button>
             {operator && (
               <button
+                className="btn-ghost small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startEditName();
+                }}
+              >
+                ✎ ویرایش نام
+              </button>
+            )}
+            {operator && (
+              <button
                 className="btn-danger small"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1655,6 +1815,47 @@ function OperatorProducts({ operator, category, products, saveProducts, creditSe
               </button>
             )}
           </div>
+          {operator && category === "credit" && (
+            <div className="operator-block" style={{ marginBottom: 12 }}>
+              <div className="operator-block-header">
+                <span>⚙️ قیمت‌گذاری {operator.name}</span>
+              </div>
+              <div className="operator-block-body">
+                <div className="status-row" style={{ marginBottom: 10 }}>
+                  <button
+                    className={"status-pill" + (operatorPricingMode === "manual" ? " active status-completed" : "")}
+                    onClick={() => setOperatorMode("manual")}
+                  >
+                    قیمت‌گذاری دستی
+                  </button>
+                  <button
+                    className={"status-pill" + (operatorPricingMode === "auto" ? " active status-completed" : "")}
+                    onClick={() => setOperatorMode("auto")}
+                  >
+                    قیمت‌گذاری خودکار
+                  </button>
+                </div>
+                {operatorPricingMode === "auto" && (
+                  <div className="add-form">
+                    <input
+                      placeholder="نرخ این اپراتور"
+                      type="number"
+                      value={rateDraft}
+                      onChange={(e) => setRateDraft(e.target.value)}
+                    />
+                    <button className="btn-primary small" onClick={saveOperatorRate}>
+                      ذخیره نرخ
+                    </button>
+                  </div>
+                )}
+                {operatorPricingMode === "auto" && (
+                  <div className="hint-text" style={{ textAlign: "right" }}>
+                    عدد فیلد عنوان بر نرخ این اپراتور ({fmt(operatorPricingRate)}) تقسیم و در ۱۰۰۰ ضرب می‌شود و نتیجه خودکار در فیلد قیمت قرار می‌گیرد.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {adding && (
             <div className="add-form">
               <input placeholder="عنوان" value={newProd.title} onChange={(e) => handleNewTitleChange(e.target.value)} />
