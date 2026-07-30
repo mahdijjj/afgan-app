@@ -21,16 +21,80 @@ const DEFAULT_PRODUCTS = [
   { id: "c4", category: "credit", title: "۱۰۰۰ افغانی", subtitle: "شارژ مستقیم", price: 1000, currency: "TOMAN", active: true },
 ];
 
-const CURRENCY_LABELS = { AFN: "افغانی", TOMAN: "تومان", USD: "دالر" };
+const CURRENCY_LABELS = { AFN: "افغانی", TOMAN: "تومان", USD: "دالر", USDT: "تتر", BTC: "بیت‌کوین" };
 const CURRENCY_OPTIONS = ["TOMAN", "AFN", "USD"];
 
-const DEFAULT_RATES = [
-  { code: "USD", label: "دلار آمریکا", value: 60000 },
-  { code: "EUR", label: "یورو", value: 65000 },
-  { code: "AED", label: "درهم امارات", value: 16300 },
-  { code: "PKR", label: "کلدار پاکستان", value: 210 },
-  { code: "AFN", label: "افغانی (نرخ حواله)", value: 0.345 },
+// ارزهای قابل انتخاب برای تعریف نرخ تبدیل (جفت ارز از/به) در بخش «نرخ ارز» پنل مدیریت
+const EXCHANGE_CURRENCIES = [
+  { code: "TOMAN", label: "تومان" },
+  { code: "AFN", label: "افغانی" },
+  { code: "USD", label: "دالر" },
+  { code: "USDT", label: "تتر" },
+  { code: "BTC", label: "بیت‌کوین" },
+  { code: "EUR", label: "یورو" },
+  { code: "PKR", label: "کلدار پاکستان" },
+  { code: "TRY", label: "لیر ترکیه" },
+  { code: "IQD", label: "دینار عراق" },
+  { code: "AED", label: "درهم امارات" },
 ];
+
+// ارزهای قابل انتخاب برای مشتری در فرم «حواله ارزی» (به همراه برچسب فارسی هرکدام)
+const REMITTANCE_CURRENCIES = [
+  { code: "AFN", label: "افغانی" },
+  { code: "TOMAN", label: "تومان" },
+  { code: "USD", label: "دالر" },
+  { code: "USDT", label: "تتر" },
+  { code: "BTC", label: "بیت‌کوین" },
+];
+function exchangeCurrencyLabel(code) {
+  const found = EXCHANGE_CURRENCIES.find((c) => c.code === code);
+  return found ? found.label : code;
+}
+// شناسه‌ی یکتا برای یک جفت ارز (از/به) می‌سازد تا هر جهت تبدیل فقط یک بار قابل ثبت باشد
+function rateId(from, to) {
+  return from + "_" + to;
+}
+
+// کیف پول مشتری می‌تواند شامل یک یا چند ارز باشد (تومان، افغانی، دلار) که مدیر تعیین می‌کند.
+// نسخه‌های قدیمی داده، کیف پول را به‌صورت یک عدد ساده (فقط تومان) ذخیره کرده بودند؛ این تابع
+// آن را به شکل شیٔ {کد ارز: مبلغ} درمی‌آورد تا بقیه‌ی برنامه همیشه با یک قالب یکسان کار کند.
+function normalizeWallet(wallet) {
+  if (wallet && typeof wallet === "object") return wallet;
+  return { TOMAN: Number(wallet) || 0 };
+}
+// موجودی یک ارز خاص از کیف پول مشتری را برمی‌گرداند (در صورت نبود آن ارز، صفر).
+function walletBalance(customer, code) {
+  const w = normalizeWallet(customer && customer.wallet);
+  return Number(w[code]) || 0;
+}
+
+// هر نرخ ارز اکنون یک «جفت ارز» است: از کدام ارز (from) به کدام ارز (to) و با چه نرخی (value).
+// مثلاً { from: "TOMAN", to: "AFN", value: 0.345 } یعنی «تومان به افغانی ۰.۳۴۵».
+const DEFAULT_RATES = [
+  { id: rateId("USD", "TOMAN"), from: "USD", to: "TOMAN", value: 60000 },
+  { id: rateId("USDT", "TOMAN"), from: "USDT", to: "TOMAN", value: 60000 },
+  { id: rateId("BTC", "TOMAN"), from: "BTC", to: "TOMAN", value: 4000000000 },
+  { id: rateId("EUR", "TOMAN"), from: "EUR", to: "TOMAN", value: 65000 },
+  { id: rateId("AED", "TOMAN"), from: "AED", to: "TOMAN", value: 16300 },
+  { id: rateId("PKR", "TOMAN"), from: "PKR", to: "TOMAN", value: 210 },
+  { id: rateId("AFN", "TOMAN"), from: "AFN", to: "TOMAN", value: 0.345 },
+];
+
+// داده‌های قدیمی نرخ ارز (که فقط یک کد ارز و مقدار داشتند و به‌طور ضمنی «به تومان» بودند) را
+// به قالب جدید جفت ارز (from/to/value) تبدیل می‌کند تا نرخ‌های قبلاً ثبت‌شده از بین نروند.
+function normalizeRates(rates) {
+  return (rates || []).map((r) => {
+    if (r && r.from && r.to) {
+      return { ...r, id: r.id || rateId(r.from, r.to) };
+    }
+    return { id: rateId(r.code, "TOMAN"), from: r.code, to: "TOMAN", value: r.value };
+  });
+}
+// نرخ تبدیل ثبت‌شده از ارز from به ارز to را پیدا می‌کند (در صورت نبود، صفر برمی‌گرداند).
+function findRateValue(rates, from, to) {
+  const found = (rates || []).find((r) => r.from === from && r.to === to);
+  return found ? Number(found.value) || 0 : 0;
+}
 
 // تنظیمات قیمت‌گذاری بخش شارژ تماس: روش «دستی» یعنی مدیر قیمت هر محصول را خودش وارد می‌کند،
 // و روش «خودکار» یعنی با تعیین یک نرخ توسط مدیر، قیمت از روی عدد فیلد عنوان محاسبه می‌شود.
@@ -41,6 +105,19 @@ function afnToToman(amountAfn, afnRateValue) {
   const rate = Number(afnRateValue) || 0;
   if (rate <= 0) return 0;
   return Math.floor((Number(amountAfn) || 0) / rate * 1000);
+}
+
+// مبلغ حواله را — به هر ارزی که مشتری از حالت کشویی انتخاب کرده — به تومان تبدیل می‌کند.
+// افغانی از فرمول مخصوص خودش استفاده می‌کند (سازگار با نرخ‌های قبلاً ثبت‌شده)، تومان بدون تغییر
+// برمی‌گردد، و بقیه ارزها (دالر، تتر، بیت‌کوین و ...) با ضرب مستقیم در نرخ ثبت‌شده محاسبه می‌شوند.
+function remittanceToToman(currency, amount, rates) {
+  const amt = Number(amount) || 0;
+  if (!amt) return 0;
+  if (currency === "TOMAN") return Math.floor(amt);
+  if (currency === "AFN") return afnToToman(amt, findRateValue(rates, "AFN", "TOMAN"));
+  const rate = findRateValue(rates, currency, "TOMAN");
+  if (rate <= 0) return 0;
+  return Math.floor(amt * rate);
 }
 
 const STATUS_LABELS = { pending: "در انتظار", processing: "در حال انجام", completed: "تکمیل شده", cancelled: "لغو شده" };
@@ -91,6 +168,28 @@ function computeAutoCreditPrice(title, rate) {
   if (num === null || r <= 0) return null;
   return Math.trunc((num / r) * 1000);
 }
+// فرمول دوم: نرخ تعیین‌شده مدیر ضربدر عدد فیلد عنوان؛ نتیجه مستقیماً در فیلد قیمت قرار می‌گیرد.
+function computeUsdFormulaPrice(title, rate) {
+  const num = extractNumber(title);
+  const r = Number(rate) || 0;
+  if (num === null || r <= 0) return null;
+  return Math.round(num * r);
+}
+// فرمول‌های قابل انتخاب برای قیمت‌گذاری خودکار هر اپراتور. هر اپراتور می‌تواند یکی از این فرمول‌ها را
+// از طریق یک منوی کشویی انتخاب کند.
+const PRICING_FORMULAS = {
+  afn_to_toman: {
+    label: "افغانی به تومان",
+    compute: computeAutoCreditPrice,
+    hint: (rate) => `عدد فیلد عنوان بر نرخ این اپراتور (${fmt(rate)}) تقسیم و در ۱۰۰۰ ضرب می‌شود و نتیجه خودکار در فیلد قیمت قرار می‌گیرد.`,
+  },
+  afn_toman_to_usd: {
+    label: "افغانی یا (تومان) به دلار",
+    compute: computeUsdFormulaPrice,
+    hint: (rate) => `نرخ این اپراتور (${fmt(rate)}) در عدد فیلد عنوان ضرب می‌شود و نتیجه خودکار در فیلد قیمت قرار می‌گیرد.`,
+  },
+};
+const DEFAULT_PRICING_FORMULA = "afn_to_toman";
 // شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
 // و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
 function normalizeWhatsApp(number) {
@@ -173,7 +272,10 @@ export default function AfganApp() {
         const record = data && data.record;
         if (record) {
           setProducts((prev) => (JSON.stringify(prev) !== JSON.stringify(record.products) ? record.products : prev));
-          setRates((prev) => (JSON.stringify(prev) !== JSON.stringify(record.rates) ? record.rates : prev));
+          setRates((prev) => {
+            const next = normalizeRates(record.rates);
+            return JSON.stringify(prev) !== JSON.stringify(next) ? next : prev;
+          });
           setCreditSettings((prev) => (JSON.stringify(prev) !== JSON.stringify(record.creditSettings) ? record.creditSettings : prev));
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
           setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
@@ -200,7 +302,7 @@ export default function AfganApp() {
     } catch (e) {}
 
     let products = (record && record.products) || [];
-    let rates = (record && record.rates) || [];
+    let rates = normalizeRates((record && record.rates) || []);
     let creditSettings = (record && record.creditSettings) || null;
     let orders = (record && record.orders) || [];
     let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
@@ -329,9 +431,13 @@ export default function AfganApp() {
     let newCustomers = customers;
     if (currentCustomer && deductAmount) {
       newCustomers = (customers || []).map((c) =>
-        c.id === currentCustomer.id ? { ...c, wallet: (c.wallet || 0) - deductAmount } : c
+        c.id === currentCustomer.id
+          ? { ...c, wallet: { ...normalizeWallet(c.wallet), TOMAN: walletBalance(c, "TOMAN") - deductAmount } }
+          : c
       );
-      setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) - deductAmount } : prev));
+      setCurrentCustomer((prev) =>
+        prev ? { ...prev, wallet: { ...normalizeWallet(prev.wallet), TOMAN: walletBalance(prev, "TOMAN") - deductAmount } } : prev
+      );
     }
     setOrders(newOrders);
     setCustomers(newCustomers);
@@ -350,10 +456,14 @@ export default function AfganApp() {
     let newCustomers = customers;
     if (shouldRefund) {
       newCustomers = (customers || []).map((c) =>
-        c.id === order.customerId ? { ...c, wallet: (c.wallet || 0) + order.walletDeduction } : c
+        c.id === order.customerId
+          ? { ...c, wallet: { ...normalizeWallet(c.wallet), TOMAN: walletBalance(c, "TOMAN") + order.walletDeduction } }
+          : c
       );
       if (currentCustomer && currentCustomer.id === order.customerId) {
-        setCurrentCustomer((prev) => (prev ? { ...prev, wallet: (prev.wallet || 0) + order.walletDeduction } : prev));
+        setCurrentCustomer((prev) =>
+          prev ? { ...prev, wallet: { ...normalizeWallet(prev.wallet), TOMAN: walletBalance(prev, "TOMAN") + order.walletDeduction } } : prev
+        );
       }
       showToast("سفارش لغو شد و مبلغ " + fmt(order.walletDeduction) + " تومان به کیف پول مشتری بازگشت داده شد");
     }
@@ -395,7 +505,7 @@ export default function AfganApp() {
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
             onOrder={(item, form) => {
-              if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
+              if (currentCustomer && walletBalance(currentCustomer, "TOMAN") < item.price) {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
@@ -431,7 +541,7 @@ export default function AfganApp() {
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
             onOrder={(item, form) => {
-              if (currentCustomer && (currentCustomer.wallet || 0) < item.price) {
+              if (currentCustomer && walletBalance(currentCustomer, "TOMAN") < item.price) {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
@@ -461,16 +571,16 @@ export default function AfganApp() {
           <RemittanceForm
             isLoggedIn={!!currentCustomer}
             onRequireLogin={requireLogin}
-            afnRate={((rates || []).find((r) => r.code === "AFN") || {}).value}
+            rates={rates}
             onSubmit={(form) => {
-              const amountAfn = Number(form.amount) || 0;
-              const afnRateValue = ((rates || []).find((r) => r.code === "AFN") || {}).value;
-              const tomanAmount = afnToToman(amountAfn, afnRateValue);
+              const amount = Number(form.amount) || 0;
+              const currency = form.currency || "AFN";
+              const tomanAmount = remittanceToToman(currency, amount, rates);
               if (!tomanAmount) {
-                showToast("نرخ روز افغانی هنوز توسط مدیریت ثبت نشده است");
+                showToast("نرخ روز این ارز هنوز توسط مدیریت ثبت نشده است");
                 return;
               }
-              if (currentCustomer && (currentCustomer.wallet || 0) < tomanAmount) {
+              if (currentCustomer && walletBalance(currentCustomer, "TOMAN") < tomanAmount) {
                 showToast("موجودی شما کافی نیست");
                 return;
               }
@@ -478,10 +588,10 @@ export default function AfganApp() {
                 {
                   type: "remittance",
                   item: "حواله ارزی",
-                  price: amountAfn,
-                  currency: "AFN",
+                  price: amount,
+                  currency,
                   tomanAmount,
-                  afnRateUsed: Number(afnRateValue) || 0,
+                  afnRateUsed: currency === "AFN" ? Number(findRateValue(rates, "AFN", "TOMAN")) || 0 : undefined,
                   customerName: form.senderName,
                   customerUsername: currentCustomer ? currentCustomer.username : "",
                   phone: form.phone,
@@ -617,7 +727,11 @@ function Home({ rates, cardInfo, currentCustomer, setPage }) {
       {currentCustomer && (
         <div className="wallet-card" style={{ marginBottom: 18 }}>
           <div className="wallet-label">موجودی کیف پول شما</div>
-          <div className="wallet-amount">{fmt(currentCustomer.wallet || 0)} تومان</div>
+          {Object.entries(normalizeWallet(currentCustomer.wallet)).map(([code, amount]) => (
+            <div className="wallet-amount" key={code}>
+              {fmt(amount)} {CURRENCY_LABELS[code] || code}
+            </div>
+          ))}
         </div>
       )}
       <div className="card-grid">
@@ -675,14 +789,14 @@ function RateBoard({ rates }) {
     <div className="rate-board">
       <div className="rate-board-title">
         <span>نرخ امروز ارز</span>
-        <span className="rate-board-unit">به تومان</span>
       </div>
       <div className="rate-strip">
-        {rates.map((r) => (
-          <div className="rate-chip" key={r.code}>
-            <div className="rate-code">{r.code}</div>
+        {(rates || []).map((r) => (
+          <div className="rate-chip" key={r.id || rateId(r.from, r.to)}>
+            <div className="rate-code">
+              {exchangeCurrencyLabel(r.from)} به {exchangeCurrencyLabel(r.to)}
+            </div>
             <div className="rate-value">{fmt(r.value)}</div>
-            <div className="rate-label">{r.label}</div>
           </div>
         ))}
       </div>
@@ -820,10 +934,14 @@ function CategoryShop({ title, icon, category, operators, products, isLoggedIn, 
 }
 
 
-function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack, afnRate }) {
-  const [form, setForm] = useState({ senderName: "", phone: "", amount: "", receiverName: "", destination: "", notes: "" });
+const CRYPTO_CURRENCIES = ["USDT", "BTC"];
+
+function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack, rates }) {
+  const [form, setForm] = useState({ senderName: "", phone: "", amount: "", currency: "AFN", receiverName: "", destination: "", notes: "" });
   const [error, setError] = useState("");
-  const tomanPreview = afnToToman(form.amount, afnRate);
+  const isCrypto = CRYPTO_CURRENCIES.includes(form.currency);
+  const tomanPreview = remittanceToToman(form.currency, form.amount, rates);
+  const currencyLabel = CURRENCY_LABELS[form.currency] || form.currency;
 
   function set(k, v) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -835,7 +953,10 @@ function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack, afnRate 
       onRequireLogin();
       return;
     }
-    if (!form.senderName.trim() || !form.phone.trim() || !form.amount || !form.receiverName.trim() || !form.destination.trim()) {
+    const requiredOk = isCrypto
+      ? !!form.amount && !!form.destination.trim()
+      : !!form.senderName.trim() && !!form.phone.trim() && !!form.amount && !!form.receiverName.trim() && !!form.destination.trim();
+    if (!requiredOk) {
       setError("لطفاً همه فیلدهای ضروری را تکمیل کنید");
       return;
     }
@@ -846,32 +967,48 @@ function RemittanceForm({ isLoggedIn, onRequireLogin, onSubmit, onBack, afnRate 
     <div className="fade-in">
       <PageHeader title="حواله ارزی" icon="💱" onBack={onBack} />
       <form className="order-form" onSubmit={submit}>
+        {!isCrypto && (
+          <label>
+            نام فرستنده
+            <input value={form.senderName} onChange={(e) => set("senderName", e.target.value)} placeholder="نام فرستنده" />
+          </label>
+        )}
+        {!isCrypto && (
+          <label>
+            شماره تماس
+            <input value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="07XXXXXXXX" type="tel" />
+          </label>
+        )}
         <label>
-          نام فرستنده
-          <input value={form.senderName} onChange={(e) => set("senderName", e.target.value)} placeholder="نام فرستنده" />
+          ارز حواله
+          <select value={form.currency} onChange={(e) => set("currency", e.target.value)}>
+            {REMITTANCE_CURRENCIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
-          شماره تماس
-          <input value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="07XXXXXXXX" type="tel" />
-        </label>
-        <label>
-          مبلغ
-          <input value={form.amount} onChange={(e) => set("amount", e.target.value)} placeholder="مبلغ به افغانی" type="number" />
+          {isCrypto ? "مقدار ارز" : "مبلغ"}
+          <input value={form.amount} onChange={(e) => set("amount", e.target.value)} placeholder={(isCrypto ? "مقدار به " : "مبلغ به ") + currencyLabel} type="number" step="any" />
         </label>
         {form.amount && (
           <div className="order-form-summary">
             {tomanPreview
               ? <>معادل تقریبی: <b>{fmt(tomanPreview)}</b> تومان از کیف پول شما کسر می‌شود</>
-              : "نرخ روز افغانی هنوز ثبت نشده — لطفاً با پشتیبانی تماس بگیرید"}
+              : "نرخ روز این ارز هنوز ثبت نشده — لطفاً با پشتیبانی تماس بگیرید"}
           </div>
         )}
+        {!isCrypto && (
+          <label>
+            نام گیرنده
+            <input value={form.receiverName} onChange={(e) => set("receiverName", e.target.value)} placeholder="نام گیرنده" />
+          </label>
+        )}
         <label>
-          نام گیرنده
-          <input value={form.receiverName} onChange={(e) => set("receiverName", e.target.value)} placeholder="نام گیرنده" />
-        </label>
-        <label>
-          مقصد
-          <input value={form.destination} onChange={(e) => set("destination", e.target.value)} placeholder="شهر / کشور مقصد" />
+          {isCrypto ? "آدرس کیف پول مقصد" : "مقصد"}
+          <input value={form.destination} onChange={(e) => set("destination", e.target.value)} placeholder={isCrypto ? "آدرس کیف پول مقصد" : "شهر / کشور مقصد"} />
         </label>
         <label>
           توضیحات
@@ -907,7 +1044,10 @@ function OrderCard({ o }) {
         </div>
       </div>
       {o.subtitle && <div className="order-card-track">{o.subtitle}</div>}
-      {o.type === "remittance" && (
+      {o.type === "remittance" && CRYPTO_CURRENCIES.includes(o.currency) && (
+        <div className="order-card-track">آدرس کیف پول: {o.destination}</div>
+      )}
+      {o.type === "remittance" && !CRYPTO_CURRENCIES.includes(o.currency) && (
         <div className="order-card-track">
           گیرنده: {o.receiverName} — مقصد: {o.destination}
         </div>
@@ -1278,9 +1418,8 @@ function CardManager({ cardInfo, saveCardInfo, showToast }) {
 
 function CustomersManager({ customers, orders, saveCustomers, showToast }) {
   const [newCust, setNewCust] = useState({ username: "", password: "", name: "", wallet: "" });
-  const [editingWallet, setEditingWallet] = useState(null);
-  const [walletDraft, setWalletDraft] = useState("");
   const [expandedCustomer, setExpandedCustomer] = useState(null);
+  const [walletPanel, setWalletPanel] = useState(null);
 
   function addCustomer() {
     if (!newCust.username.trim() || !newCust.password.trim()) {
@@ -1296,7 +1435,7 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
       username: newCust.username.trim(),
       password: newCust.password,
       name: newCust.name.trim() || newCust.username.trim(),
-      wallet: Number(newCust.wallet) || 0,
+      wallet: { TOMAN: Number(newCust.wallet) || 0 },
       createdAt: new Date().toISOString(),
     };
     saveCustomers([...(customers || []), item]);
@@ -1307,16 +1446,6 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
   function removeCustomer(c) {
     saveCustomers(customers.filter((x) => x.id !== c.id));
     showToast("مشتری حذف شد");
-  }
-
-  function startWalletEdit(c) {
-    setEditingWallet(c.id);
-    setWalletDraft(String(c.wallet || 0));
-  }
-  function saveWallet(c) {
-    saveCustomers(customers.map((x) => (x.id === c.id ? { ...x, wallet: Number(walletDraft) || 0 } : x)));
-    setEditingWallet(null);
-    showToast("کیف پول به‌روزرسانی شد");
   }
 
   return (
@@ -1355,31 +1484,25 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
                 <div className="product-subtitle">نام کاربری: {c.username}</div>
               </div>
               <div className="product-actions">
-                {editingWallet === c.id ? (
-                  <>
-                    <input
-                      type="number"
-                      value={walletDraft}
-                      onChange={(e) => setWalletDraft(e.target.value)}
-                      style={{ width: 90, padding: "8px 10px", borderRadius: 10, border: "1px solid #e2ddce" }}
-                    />
-                    <button className="btn-primary small" onClick={() => saveWallet(c)}>
-                      ذخیره
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="product-price">{fmt(c.wallet || 0)} تومان</div>
-                    <button className="btn-ghost small" onClick={() => startWalletEdit(c)}>
-                      ویرایش کیف پول
-                    </button>
-                  </>
-                )}
+                <div className="product-price" style={{ textAlign: "left" }}>
+                  {Object.entries(normalizeWallet(c.wallet)).length === 0 && "بدون موجودی"}
+                  {Object.entries(normalizeWallet(c.wallet)).map(([code, amount]) => (
+                    <div key={code}>
+                      {fmt(amount)} {CURRENCY_LABELS[code] || code}
+                    </div>
+                  ))}
+                </div>
+                <button className="btn-ghost small" onClick={() => setWalletPanel(walletPanel === c.id ? null : c.id)}>
+                  مدیریت کیف پول
+                </button>
                 <button className="btn-danger small" onClick={() => removeCustomer(c)}>
                   حذف
                 </button>
               </div>
             </div>
+            {walletPanel === c.id && (
+              <CustomerWalletManager customer={c} customers={customers} saveCustomers={saveCustomers} showToast={showToast} />
+            )}
             {isExpanded && (
               <div style={{ width: "100%", marginTop: 10 }}>
                 {custOrders.length === 0 && <div className="empty-state">این مشتری هنوز سفارشی ثبت نکرده است.</div>}
@@ -1392,6 +1515,7 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
                       <span className="order-card-price">
                         {fmt(o.price)} {CURRENCY_LABELS[o.currency || "TOMAN"]}
                       </span>
+
                     </div>
                     <div className="admin-order-meta">
                       <span>{TYPE_LABELS[o.type]}</span>
@@ -1406,9 +1530,21 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
                       {o.operatorName && <div>اپراتور: {o.operatorName}</div>}
                       {o.type === "remittance" && (
                         <>
-                          <div>گیرنده: {o.receiverName}</div>
-                          <div>مقصد: {o.destination}</div>
-                          {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
+                          {CRYPTO_CURRENCIES.includes(o.currency) ? (
+                            <div>آدرس کیف پول: {o.destination}</div>
+                          ) : (
+                            <>
+                              <div>گیرنده: {o.receiverName}</div>
+                              <div>مقصد: {o.destination}</div>
+                            </>
+                          )}
+                          <div>مبلغ حواله: {fmt(o.price)} {CURRENCY_LABELS[o.currency || "AFN"]}</div>
+                          {!!o.tomanAmount && (
+                            <div>
+                              مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان
+                              {o.currency === "AFN" && !!o.afnRateUsed ? " (نرخ: " + o.afnRateUsed + ")" : ""}
+                            </div>
+                          )}
                           {o.notes && <div>توضیحات: {o.notes}</div>}
                         </>
                       )}
@@ -1428,6 +1564,93 @@ function CustomersManager({ customers, orders, saveCustomers, showToast }) {
   );
 }
 
+// مدیریت کیف پول چندارزی هر مشتری: مدیر تعیین می‌کند چه ارزی (تومان، افغانی، دلار) به کیف پول
+// این مشتری اضافه شود، موجودی هر ارز را ویرایش می‌کند یا یک ارز را کاملاً از کیف پول حذف می‌کند.
+function CustomerWalletManager({ customer, customers, saveCustomers, showToast }) {
+  const wallet = normalizeWallet(customer.wallet);
+  const walletCodes = Object.keys(wallet);
+  const availableToAdd = CURRENCY_OPTIONS.filter((code) => !walletCodes.includes(code));
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(walletCodes.map((code) => [code, String(wallet[code])])));
+  const [newCurrency, setNewCurrency] = useState({ code: availableToAdd[0] || "", amount: "" });
+
+  function updateWallet(nextWallet) {
+    saveCustomers(customers.map((x) => (x.id === customer.id ? { ...x, wallet: nextWallet } : x)));
+  }
+
+  function saveBalance(code) {
+    updateWallet({ ...wallet, [code]: Number(drafts[code]) || 0 });
+    showToast("موجودی " + (CURRENCY_LABELS[code] || code) + " به‌روزرسانی شد");
+  }
+
+  function removeCurrency(code) {
+    const next = { ...wallet };
+    delete next[code];
+    updateWallet(next);
+    showToast((CURRENCY_LABELS[code] || code) + " از کیف پول این مشتری حذف شد");
+  }
+
+  function addCurrency() {
+    if (!newCurrency.code) {
+      showToast("ارز مورد نظر را انتخاب کنید");
+      return;
+    }
+    updateWallet({ ...wallet, [newCurrency.code]: Number(newCurrency.amount) || 0 });
+    setNewCurrency({ code: "", amount: "" });
+    showToast((CURRENCY_LABELS[newCurrency.code] || newCurrency.code) + " به کیف پول این مشتری اضافه شد");
+  }
+
+  return (
+    <div style={{ width: "100%", marginTop: 10 }}>
+      <div className="operator-block">
+        <div className="operator-block-header">
+          <span>💰 مدیریت کیف پول {customer.name}</span>
+        </div>
+        <div className="operator-block-body">
+          {walletCodes.length === 0 && <div className="empty-state">این مشتری هنوز هیچ ارزی در کیف پول ندارد.</div>}
+          {walletCodes.map((code) => (
+            <div className="rate-row" key={code}>
+              <div className="rate-row-label">
+                <b>{CURRENCY_LABELS[code] || code}</b>
+              </div>
+              <input
+                type="number"
+                value={drafts[code] ?? ""}
+                onChange={(e) => setDrafts((d) => ({ ...d, [code]: e.target.value }))}
+              />
+              <button className="btn-primary small" onClick={() => saveBalance(code)}>
+                ذخیره
+              </button>
+              <button className="btn-danger small" onClick={() => removeCurrency(code)}>
+                حذف ارز
+              </button>
+            </div>
+          ))}
+          {availableToAdd.length > 0 && (
+            <div className="add-form" style={{ marginTop: 10 }}>
+              <select value={newCurrency.code} onChange={(e) => setNewCurrency((n) => ({ ...n, code: e.target.value }))}>
+                <option value="">افزودن ارز جدید...</option>
+                {availableToAdd.map((code) => (
+                  <option key={code} value={code}>
+                    {CURRENCY_LABELS[code] || code}
+                  </option>
+                ))}
+              </select>
+              <input
+                placeholder="موجودی اولیه"
+                type="number"
+                value={newCurrency.amount}
+                onChange={(e) => setNewCurrency((n) => ({ ...n, amount: e.target.value }))}
+              />
+              <button className="btn-primary small" onClick={addCurrency}>
+                افزودن ارز به کیف پول
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Dashboard({ orders, products }) {
   const total = orders.length;
@@ -1489,84 +1712,6 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, cre
   );
 }
 
-// تنظیمات روش قیمت‌گذاری عمومی بخش شارژ تماس: فقط برای محصولاتی که به هیچ اپراتوری
-// متصل نیستند کاربرد دارد. هر اپراتور تنظیمات قیمت‌گذاری مخصوص به خودش را دارد
-// (داخل بلوک همان اپراتور در OperatorProducts).
-function CreditPricingSettings({ creditSettings, saveCreditSettings, products, saveProducts, showToast }) {
-  const current = creditSettings || DEFAULT_CREDIT_SETTINGS;
-  const [rateDraft, setRateDraft] = useState(current.rate || "");
-
-  useEffect(() => {
-    setRateDraft(current.rate || "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current.rate]);
-
-  function setMode(mode) {
-    saveCreditSettings({ ...current, mode });
-    showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار فعال شد" : "روش قیمت‌گذاری دستی فعال شد");
-  }
-
-  // با تعیین نرخ جدید، علاوه بر ذخیره‌ی نرخ، قیمت محصولاتِ بدون اپراتورِ «شارژ تماس»
-  // بر اساس عدد فیلد عنوان هرکدام و نرخ تازه، دوباره محاسبه و به‌روزرسانی می‌شود.
-  function saveRate() {
-    const rate = Number(rateDraft) || 0;
-    if (rate <= 0) {
-      showToast("نرخ معتبر وارد کنید");
-      return;
-    }
-    saveCreditSettings({ ...current, rate });
-    if (products && saveProducts) {
-      const updated = products.map((p) => {
-        if (p.category !== "credit" || p.operatorId) return p;
-        const computed = computeAutoCreditPrice(p.title, rate);
-        return computed !== null ? { ...p, price: computed } : p;
-      });
-      saveProducts(updated);
-    }
-    showToast("نرخ ذخیره شد و قیمت‌های قبلی به‌روزرسانی شدند");
-  }
-
-  return (
-    <div className="operator-block">
-      <div className="operator-block-header">
-        <span>⚙️ قیمت‌گذاری محصولات بدون اپراتور</span>
-      </div>
-      <div className="operator-block-body">
-        <div className="hint-text" style={{ textAlign: "right", marginBottom: 8 }}>
-          این تنظیمات فقط روی محصولاتی که به هیچ اپراتوری متصل نیستند اثر می‌گذارد. برای هر اپراتور،
-          روش قیمت‌گذاری از داخل بلوک همان اپراتور به‌طور جداگانه تعیین می‌شود.
-        </div>
-        <div className="status-row" style={{ marginBottom: 10 }}>
-          <button className={"status-pill" + (current.mode === "manual" ? " active status-completed" : "")} onClick={() => setMode("manual")}>
-            قیمت‌گذاری دستی
-          </button>
-          <button className={"status-pill" + (current.mode === "auto" ? " active status-completed" : "")} onClick={() => setMode("auto")}>
-            قیمت‌گذاری خودکار
-          </button>
-        </div>
-        {current.mode === "auto" && (
-          <div className="add-form">
-            <input
-              placeholder="نرخ (مثلاً نرخ تبدیل)"
-              type="number"
-              value={rateDraft}
-              onChange={(e) => setRateDraft(e.target.value)}
-            />
-            <button className="btn-primary small" onClick={saveRate}>
-              ذخیره نرخ
-            </button>
-          </div>
-        )}
-        {current.mode === "auto" && (
-          <div className="hint-text" style={{ textAlign: "right" }}>
-            در این روش، عدد فیلد عنوان هنگام افزودن یا ویرایش محصول بر نرخ تعیین‌شده ({fmt(current.rate)}) تقسیم و سپس در ۱۰۰۰ ضرب می‌شود و نتیجه به‌طور خودکار در فیلد قیمت قرار می‌گیرد.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function CategorySection({ category, label, products, operators, saveProducts, saveOperators, creditSettings, saveCreditSettings, showToast }) {
   const [newOpName, setNewOpName] = useState("");
   const catOperators = (operators || []).filter((o) => o.category === category);
@@ -1595,15 +1740,6 @@ function CategorySection({ category, label, products, operators, saveProducts, s
       <div className="admin-section-title">
         <span>{label}</span>
       </div>
-      {category === "credit" && (
-        <CreditPricingSettings
-          creditSettings={creditSettings}
-          saveCreditSettings={saveCreditSettings}
-          products={products}
-          saveProducts={saveProducts}
-          showToast={showToast}
-        />
-      )}
       <div className="add-form">
         <input placeholder="نام اپراتور جدید (مثلاً روشان)" value={newOpName} onChange={(e) => setNewOpName(e.target.value)} />
         <button className="btn-primary small" onClick={addOperator}>
@@ -1650,10 +1786,12 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operator && operator.name, operator && operator.pricingRate]);
 
-  // برای دسته «شارژ تماس»: اگر محصول به یک اپراتور متصل باشد، روش و نرخ قیمت‌گذاریِ همان اپراتور
-  // استفاده می‌شود؛ برای محصولات بدون اپراتور، تنظیمات عمومی (creditSettings) به کار می‌رود.
-  const operatorPricingMode = operator ? operator.pricingMode || "manual" : (creditSettings || DEFAULT_CREDIT_SETTINGS).mode;
-  const operatorPricingRate = operator ? Number(operator.pricingRate) || 0 : Number((creditSettings || DEFAULT_CREDIT_SETTINGS).rate) || 0;
+  // برای دسته «شارژ تماس»: اگر محصول به یک اپراتور متصل باشد، روش، نرخ و فرمول قیمت‌گذاریِ همان
+  // اپراتور استفاده می‌شود. محصولات بدون اپراتور همیشه به‌صورت دستی قیمت‌گذاری می‌شوند.
+  const operatorPricingMode = operator ? operator.pricingMode || "manual" : "manual";
+  const operatorPricingRate = operator ? Number(operator.pricingRate) || 0 : 0;
+  const operatorPricingFormula = operator ? operator.pricingFormula || DEFAULT_PRICING_FORMULA : DEFAULT_PRICING_FORMULA;
+  const activeFormula = PRICING_FORMULAS[operatorPricingFormula] || PRICING_FORMULAS[DEFAULT_PRICING_FORMULA];
   const autoPricing = category === "credit" && operatorPricingMode === "auto" && operatorPricingRate > 0;
 
   const list = products.filter((p) => p.category === category && (operator ? p.operatorId === operator.id : !p.operatorId));
@@ -1667,8 +1805,23 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
     showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار برای این اپراتور فعال شد" : "روش قیمت‌گذاری دستی برای این اپراتور فعال شد");
   }
 
-  // با تعیین نرخ جدید برای این اپراتور، قیمت محصولات موجود همین اپراتور نیز
-  // بر اساس عدد فیلد عنوان هرکدام و نرخ تازه، دوباره محاسبه و به‌روزرسانی می‌شود.
+  // با انتخاب فرمول جدید، قیمت محصولات موجود این اپراتور بر اساس فرمول و نرخ فعلی دوباره محاسبه می‌شود.
+  function setOperatorFormula(formulaKey) {
+    updateOperator({ pricingFormula: formulaKey });
+    if (operatorPricingRate > 0) {
+      const formula = PRICING_FORMULAS[formulaKey];
+      const updated = products.map((p) => {
+        if (p.category !== "credit" || p.operatorId !== operator.id) return p;
+        const computed = formula.compute(p.title, operatorPricingRate);
+        return computed !== null ? { ...p, price: computed } : p;
+      });
+      saveProducts(updated);
+    }
+    showToast("فرمول قیمت‌گذاری تغییر کرد");
+  }
+
+  // با تعیین نرخ جدید برای این اپراتور، قیمت محصولات موجود همین اپراتور نیز بر اساس فرمول انتخاب‌شده
+  // و عدد فیلد عنوان هرکدام، دوباره محاسبه و به‌روزرسانی می‌شود.
   function saveOperatorRate() {
     const rate = Number(rateDraft) || 0;
     if (rate <= 0) {
@@ -1678,7 +1831,7 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
     updateOperator({ pricingRate: rate });
     const updated = products.map((p) => {
       if (p.category !== "credit" || p.operatorId !== operator.id) return p;
-      const computed = computeAutoCreditPrice(p.title, rate);
+      const computed = activeFormula.compute(p.title, rate);
       return computed !== null ? { ...p, price: computed } : p;
     });
     saveProducts(updated);
@@ -1744,7 +1897,7 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
     setNewProd((n) => {
       const next = { ...n, title };
       if (autoPricing) {
-        const computed = computeAutoCreditPrice(title, operatorPricingRate);
+        const computed = activeFormula.compute(title, operatorPricingRate);
         if (computed !== null) next.price = String(computed);
       }
       return next;
@@ -1755,7 +1908,7 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
     setDraft((d) => {
       const next = { ...d, title };
       if (autoPricing) {
-        const computed = computeAutoCreditPrice(title, operatorPricingRate);
+        const computed = activeFormula.compute(title, operatorPricingRate);
         if (computed !== null) next.price = String(computed);
       }
       return next;
@@ -1837,6 +1990,13 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
                 </div>
                 {operatorPricingMode === "auto" && (
                   <div className="add-form">
+                    <select value={operatorPricingFormula} onChange={(e) => setOperatorFormula(e.target.value)}>
+                      {Object.entries(PRICING_FORMULAS).map(([key, f]) => (
+                        <option key={key} value={key}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       placeholder="نرخ این اپراتور"
                       type="number"
@@ -1850,7 +2010,7 @@ function OperatorProducts({ operator, category, products, saveProducts, operator
                 )}
                 {operatorPricingMode === "auto" && (
                   <div className="hint-text" style={{ textAlign: "right" }}>
-                    عدد فیلد عنوان بر نرخ این اپراتور ({fmt(operatorPricingRate)}) تقسیم و در ۱۰۰۰ ضرب می‌شود و نتیجه خودکار در فیلد قیمت قرار می‌گیرد.
+                    {activeFormula.hint(operatorPricingRate)}
                   </div>
                 )}
               </div>
@@ -1982,9 +2142,21 @@ function OrdersManager({ orders, customers, saveOrders, updateOrderStatus }) {
                 {o.operatorName && <div>اپراتور: {o.operatorName}</div>}
                 {o.type === "remittance" && (
                   <>
-                    <div>گیرنده: {o.receiverName}</div>
-                    <div>مقصد: {o.destination}</div>
-                    {!!o.tomanAmount && <div>مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان (نرخ: {o.afnRateUsed})</div>}
+                    {CRYPTO_CURRENCIES.includes(o.currency) ? (
+                      <div>آدرس کیف پول: {o.destination}</div>
+                    ) : (
+                      <>
+                        <div>گیرنده: {o.receiverName}</div>
+                        <div>مقصد: {o.destination}</div>
+                      </>
+                    )}
+                    <div>مبلغ حواله: {fmt(o.price)} {CURRENCY_LABELS[o.currency || "AFN"]}</div>
+                    {!!o.tomanAmount && (
+                      <div>
+                        مبلغ کسر شده از کیف پول: {fmt(o.tomanAmount)} تومان
+                        {o.currency === "AFN" && !!o.afnRateUsed ? " (نرخ: " + o.afnRateUsed + ")" : ""}
+                      </div>
+                    )}
                     {o.notes && <div>توضیحات: {o.notes}</div>}
                   </>
                 )}
@@ -2012,53 +2184,114 @@ function OrdersManager({ orders, customers, saveOrders, updateOrderStatus }) {
 }
 
 function RatesManager({ rates, saveRates, showToast }) {
-  const [drafts, setDrafts] = useState(() => Object.fromEntries(rates.map((r) => [r.code, r.value])));
-  const [newRate, setNewRate] = useState({ code: "", label: "", value: "" });
+  // هر نرخ یک جفت ارز (از/به) و یک مقدار است. drafts مقادیر در حال ویرایش هر ردیف را نگه می‌دارد
+  // تا تغییرات فقط بعد از زدن «ذخیره» اعمال شوند.
+  const [drafts, setDrafts] = useState(() =>
+    Object.fromEntries(rates.map((r) => [r.id, { from: r.from, to: r.to, value: r.value }]))
+  );
+  const [newRate, setNewRate] = useState({ from: "TOMAN", to: "AFN", value: "" });
 
-  function save(code) {
-    saveRates(rates.map((r) => (r.code === code ? { ...r, value: Number(drafts[code]) || 0 } : r)));
-    showToast("نرخ به‌روزرسانی شد");
+  function updateDraft(id, key, val) {
+    setDrafts((d) => ({ ...d, [id]: { ...(d[id] || {}), [key]: val } }));
   }
-  function removeRate(code) {
-    saveRates(rates.filter((r) => r.code !== code));
-    showToast("ارز حذف شد");
-  }
-  function addRate() {
-    if (!newRate.code.trim() || !newRate.label.trim() || !newRate.value) {
-      showToast("همه فیلدهای ارز جدید را تکمیل کنید");
+
+  function save(r) {
+    const d = drafts[r.id] || { from: r.from, to: r.to, value: r.value };
+    if (d.from === d.to) {
+      showToast("ارز مبدا و مقصد نمی‌توانند یکسان باشند");
       return;
     }
-    saveRates([...rates, { code: newRate.code.toUpperCase(), label: newRate.label, value: Number(newRate.value) || 0 }]);
-    setNewRate({ code: "", label: "", value: "" });
-    showToast("ارز جدید اضافه شد");
+    const newRowId = rateId(d.from, d.to);
+    if (newRowId !== r.id && rates.some((x) => x.id === newRowId)) {
+      showToast("این جفت ارز قبلاً ثبت شده است");
+      return;
+    }
+    saveRates(rates.map((x) => (x.id === r.id ? { id: newRowId, from: d.from, to: d.to, value: Number(d.value) || 0 } : x)));
+    showToast("نرخ به‌روزرسانی شد");
+  }
+  function removeRate(id) {
+    saveRates(rates.filter((r) => r.id !== id));
+    showToast("نرخ حذف شد");
+  }
+  function addRate() {
+    if (!newRate.from || !newRate.to || newRate.value === "") {
+      showToast("همه فیلدهای نرخ جدید را تکمیل کنید");
+      return;
+    }
+    if (newRate.from === newRate.to) {
+      showToast("ارز مبدا و مقصد نمی‌توانند یکسان باشند");
+      return;
+    }
+    const id = rateId(newRate.from, newRate.to);
+    if (rates.some((r) => r.id === id)) {
+      showToast("این جفت ارز قبلاً ثبت شده — همان ردیف را ویرایش کنید");
+      return;
+    }
+    saveRates([...rates, { id, from: newRate.from, to: newRate.to, value: Number(newRate.value) || 0 }]);
+    setNewRate({ from: "TOMAN", to: "AFN", value: "" });
+    showToast("نرخ جدید اضافه شد");
   }
 
   return (
     <div className="admin-section">
-      {rates.map((r) => (
-        <div className="rate-row" key={r.code}>
-          <div className="rate-row-label">
-            <b>{r.code}</b> {r.label}
+      {rates.map((r) => {
+        const d = drafts[r.id] || { from: r.from, to: r.to, value: r.value };
+        return (
+          <div className="rate-row rate-row-pair" key={r.id}>
+            <select value={d.from} onChange={(e) => updateDraft(r.id, "from", e.target.value)}>
+              {EXCHANGE_CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span className="rate-row-sep">به</span>
+            <select value={d.to} onChange={(e) => updateDraft(r.id, "to", e.target.value)}>
+              {EXCHANGE_CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              value={d.value}
+              placeholder="نرخ"
+              onChange={(e) => updateDraft(r.id, "value", e.target.value)}
+            />
+            <button className="btn-primary small" onClick={() => save(r)}>
+              ذخیره
+            </button>
+            <button className="btn-danger small" onClick={() => removeRate(r.id)}>
+              حذف
+            </button>
           </div>
-          <input
-            type="number"
-            value={drafts[r.code]}
-            onChange={(e) => setDrafts((d) => ({ ...d, [r.code]: e.target.value }))}
-          />
-          <button className="btn-primary small" onClick={() => save(r.code)}>
-            ذخیره
-          </button>
-          <button className="btn-danger small" onClick={() => removeRate(r.code)}>
-            حذف
-          </button>
-        </div>
-      ))}
-      <div className="add-form">
-        <input placeholder="کد ارز (USD)" value={newRate.code} onChange={(e) => setNewRate((n) => ({ ...n, code: e.target.value }))} />
-        <input placeholder="نام ارز" value={newRate.label} onChange={(e) => setNewRate((n) => ({ ...n, label: e.target.value }))} />
-        <input placeholder="نرخ" type="number" value={newRate.value} onChange={(e) => setNewRate((n) => ({ ...n, value: e.target.value }))} />
+        );
+      })}
+      <div className="add-form rate-row-pair">
+        <select value={newRate.from} onChange={(e) => setNewRate((n) => ({ ...n, from: e.target.value }))}>
+          {EXCHANGE_CURRENCIES.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <span className="rate-row-sep">به</span>
+        <select value={newRate.to} onChange={(e) => setNewRate((n) => ({ ...n, to: e.target.value }))}>
+          {EXCHANGE_CURRENCIES.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <input
+          placeholder="نرخ تبدیل"
+          type="number"
+          value={newRate.value}
+          onChange={(e) => setNewRate((n) => ({ ...n, value: e.target.value }))}
+        />
         <button className="btn-primary small" onClick={addRate}>
-          افزودن ارز
+          افزودن نرخ
         </button>
       </div>
     </div>
@@ -2132,6 +2365,7 @@ function Style() {
       }
       .wallet-label { font-size: 12px; opacity: 0.75; margin-bottom: 6px; }
       .wallet-amount { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .wallet-amount + .wallet-amount { margin-top: 4px; font-size: 18px; }
       .btn-ghost.full { width: 100%; padding: 13px; font-size: 14px; border-radius: 14px; text-align: center; }
       .afgan-main { padding: 16px; flex: 1; }
       .fade-in { animation: fadeIn 0.25s ease; }
@@ -2151,7 +2385,7 @@ function Style() {
         min-width: 82px; background: rgba(255,255,255,0.05); border: 1px solid rgba(231,182,92,0.25);
         border-radius: 12px; padding: 8px 10px; text-align: center; flex-shrink: 0;
       }
-      .rate-code { color: var(--accent-soft); font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+      .rate-code { color: var(--accent-soft); font-size: 11px; font-weight: 700; white-space: nowrap; }
       .rate-value { color: var(--board-digit); font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 2px 0; }
       .rate-label { color: #9fb0aa; font-size: 10px; }
 
@@ -2194,10 +2428,10 @@ function Style() {
 
       .order-form { background: var(--surface); border-radius: 20px; padding: 18px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 6px 18px rgba(14,77,68,0.08); }
       .order-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
-      .order-form input, .order-form textarea {
+      .order-form input, .order-form textarea, .order-form select {
         font-family: inherit; padding: 11px 12px; border-radius: 12px; border: 1px solid #e2ddce; font-size: 14px; color: var(--ink); background: #FBFAF6;
       }
-      .order-form input:focus, .order-form textarea:focus { outline: 2px solid var(--primary); border-color: transparent; }
+      .order-form input:focus, .order-form textarea:focus, .order-form select:focus { outline: 2px solid var(--primary); border-color: transparent; }
       .order-form-summary { background: var(--accent-soft); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
       .form-error { color: var(--danger); font-size: 12px; }
       .form-btn-row { display: flex; gap: 10px; }
@@ -2251,6 +2485,17 @@ function Style() {
       .rate-row { display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 4px 14px rgba(14,77,68,0.06); }
       .rate-row-label { flex: 1; font-size: 13px; }
       .rate-row input { width: 90px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2ddce; font-family: inherit; }
+      .rate-row-pair { flex-wrap: wrap; }
+      .rate-row-pair select {
+        flex: 1; min-width: 96px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2ddce;
+        font-family: inherit; font-size: 13px; background: #fff; color: var(--ink);
+      }
+      .rate-row-pair input { width: 80px; }
+      .rate-row-sep { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+      .add-form select {
+        flex: 1; min-width: 96px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e2ddce;
+        font-family: inherit; font-size: 13px; background: #fff; color: var(--ink);
+      }
 
       .order-card-track { font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 4px; }
 
