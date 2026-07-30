@@ -6,16 +6,34 @@
 // GET          -> آخرین داده‌ی ذخیره‌شده را برمی‌گرداند: { record: {...} } یا { record: null }
 // POST / PUT   -> بدنه‌ی JSON درخواست را به‌عنوان جدیدترین نسخه‌ی داده ذخیره می‌کند
 //
-// نیاز به هیچ متغیر محیطی یا کلید API‌ای ندارد؛ Netlify خودش دسترسی Blobs را برای
-// فانکشن‌های همان سایت فراهم می‌کند. فقط باید پکیج @netlify/blobs در package.json باشد.
+// نیازمند این دو متغیر محیطی در پنل Netlify (Site configuration → Environment variables):
+//   BLOBS_SITE_ID   شناسه‌ی سایت (Site ID) از Site configuration → General → Site details
+//   BLOBS_TOKEN     یک Personal Access Token از User settings → Applications → New access token
+// این دو مقدار مستقیم به getStore داده می‌شوند تا مشکل تشخیص خودکار محیط Blobs
+// (خطای MissingBlobsEnvironmentError) که در برخی سایت‌های Netlify رخ می‌دهد، دور زده شود.
 
 import { getStore } from "@netlify/blobs";
 
 const STORE_NAME = "afgan-app-data";
 const KEY = "state";
 
+function getAppStore() {
+  return getStore({
+    name: STORE_NAME,
+    siteID: process.env.BLOBS_SITE_ID,
+    token: process.env.BLOBS_TOKEN,
+  });
+}
+
 export const handler = async (event) => {
-  const store = getStore(STORE_NAME);
+  if (!process.env.BLOBS_SITE_ID || !process.env.BLOBS_TOKEN) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "متغیرهای BLOBS_SITE_ID و BLOBS_TOKEN روی سرور تنظیم نشده‌اند." }),
+    };
+  }
+
+  const store = getAppStore();
 
   if (event.httpMethod === "GET") {
     try {
