@@ -7,7 +7,7 @@ const ADMIN_PASSWORD = "Mahdi35";
 const JSONBIN_BIN_ID = "6a668a3cf5f4af5e29c50f2c";
 const JSONBIN_API_KEY = "$2a$10$M4JrqWL2WXu2iu2baYsD2ujKh0p6P3WYBM2umsli.oE4d95F8ZadO";
 const JSONBIN_URL = "https://api.jsonbin.io/v3/b/" + JSONBIN_BIN_ID;
-const POLL_INTERVAL_MS = 60000; // how often the app re-checks jsonbin for changes made by others
+const POLL_INTERVAL_MS = 20000; // how often the app re-checks jsonbin for changes made by others
 // ==============================
 
 const DEFAULT_PRODUCTS = [
@@ -84,11 +84,12 @@ function extractNumber(str) {
   return match ? parseFloat(match[0]) : null;
 }
 // در حالت قیمت‌گذاری خودکار شارژ تماس: عدد فیلد عنوان تقسیم بر نرخ تعیین‌شده مدیر، ضربدر ۱۰۰۰.
+// نتیجه به عدد صحیح (بدون اعشار) کوتاه می‌شود؛ فقط رقم‌های قبل از نقطه اعشار در نظر گرفته می‌شوند.
 function computeAutoCreditPrice(title, rate) {
   const num = extractNumber(title);
   const r = Number(rate) || 0;
   if (num === null || r <= 0) return null;
-  return Math.round((num / r) * 1000 * 100) / 100;
+  return Math.trunc((num / r) * 1000);
 }
 // شماره واتساپ را برای لینک wa.me نرمال می‌کند: کاراکترهای غیرعددی، صفر بین‌المللی (00)
 // و صفر ابتدای فرمت داخلی را حذف و در صورت نبود کد کشور، کد افغانستان (93) را اضافه می‌کند.
@@ -1416,7 +1417,7 @@ function ProductsManager({ products, operators, saveProducts, saveOperators, cre
 }
 
 // تنظیمات روش قیمت‌گذاری بخش شارژ تماس: انتخاب دستی/خودکار و تعیین نرخ برای روش خودکار.
-function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }) {
+function CreditPricingSettings({ creditSettings, saveCreditSettings, products, saveProducts, showToast }) {
   const current = creditSettings || DEFAULT_CREDIT_SETTINGS;
   const [rateDraft, setRateDraft] = useState(current.rate || "");
 
@@ -1430,6 +1431,8 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
     showToast(mode === "auto" ? "روش قیمت‌گذاری خودکار فعال شد" : "روش قیمت‌گذاری دستی فعال شد");
   }
 
+  // با تعیین نرخ جدید، علاوه بر ذخیره‌ی نرخ، قیمت تمام محصولات موجود «شارژ تماس» نیز
+  // بر اساس عدد فیلد عنوان هرکدام و نرخ تازه، دوباره محاسبه و به‌روزرسانی می‌شود.
   function saveRate() {
     const rate = Number(rateDraft) || 0;
     if (rate <= 0) {
@@ -1437,7 +1440,15 @@ function CreditPricingSettings({ creditSettings, saveCreditSettings, showToast }
       return;
     }
     saveCreditSettings({ ...current, rate });
-    showToast("نرخ ذخیره شد");
+    if (products && saveProducts) {
+      const updated = products.map((p) => {
+        if (p.category !== "credit") return p;
+        const computed = computeAutoCreditPrice(p.title, rate);
+        return computed !== null ? { ...p, price: computed } : p;
+      });
+      saveProducts(updated);
+    }
+    showToast("نرخ ذخیره شد و قیمت‌های قبلی به‌روزرسانی شدند");
   }
 
   return (
@@ -1506,7 +1517,13 @@ function CategorySection({ category, label, products, operators, saveProducts, s
         <span>{label}</span>
       </div>
       {category === "credit" && (
-        <CreditPricingSettings creditSettings={creditSettings} saveCreditSettings={saveCreditSettings} showToast={showToast} />
+        <CreditPricingSettings
+          creditSettings={creditSettings}
+          saveCreditSettings={saveCreditSettings}
+          products={products}
+          saveProducts={saveProducts}
+          showToast={showToast}
+        />
       )}
       <div className="add-form">
         <input placeholder="نام اپراتور جدید (مثلاً روشان)" value={newOpName} onChange={(e) => setNewOpName(e.target.value)} />
