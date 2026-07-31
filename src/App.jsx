@@ -219,6 +219,16 @@ async function sendOrderToTelegram(order) {
   }
 }
 
+// توکن ورود مدیر را از localStorage می‌خواند تا در درخواست‌های ذخیره‌سازی مدیریتی
+// به‌عنوان هدر Authorization فرستاده شود.
+function getAdminToken() {
+  try {
+    return localStorage.getItem("afgan_admin_token") || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 export default function AfganApp() {
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState(null);
@@ -344,10 +354,16 @@ export default function AfganApp() {
     }
 
     if (needsSeed) {
+      // این نوشتن اولیه هم مثل persist یک بازنویسی کامل داده است، پس توکن مدیر لازم دارد.
+      // اگر بازدیدکننده ادمین نباشد (توکن نداشته باشد) این درخواست رد می‌شود و فقط مقادیر
+      // پیش‌فرض به‌صورت موقت و محلی نمایش داده می‌شوند، بدون این‌که چیزی روی سرور نوشته شود.
       try {
         await fetch(DATA_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + getAdminToken(),
+          },
           body: JSON.stringify({ products, rates, creditSettings, orders, cardInfo, customers, operators }),
         });
       } catch (e) {}
@@ -363,12 +379,18 @@ export default function AfganApp() {
     setLoaded(true);
   }
 
+  // این تابع فقط برای کارهای مدیریتی (پنل مدیریت) استفاده می‌شود و کل داده را جایگزین
+  // می‌کند؛ به همین دلیل باید توکن معتبر ورود مدیر را همراه درخواست بفرستد، وگرنه سرور
+  // آن را رد می‌کند.
   async function persist(nextState) {
     pendingWritesRef.current += 1;
     const run = () =>
       fetch(DATA_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + getAdminToken(),
+        },
         body: JSON.stringify(nextState),
       })
         .catch(() => {})
@@ -378,6 +400,43 @@ export default function AfganApp() {
     // با زنجیره‌کردن روی نتیجه‌ی درخواست قبلی، هر درخواست ذخیره‌سازی جدید فقط بعد از
     // تمام‌شدنِ درخواست قبلی ارسال می‌شود - یعنی همیشه به همان ترتیبی که کاربر ثبت کرده،
     // روی سرور نوشته می‌شوند و هیچ‌کدام گم نمی‌شوند.
+    persistChainRef.current = persistChainRef.current.then(run);
+    return persistChainRef.current;
+  }
+
+  // ثبت سفارش توسط مشتری. برخلاف persist بالا، نیازی به توکن مدیر ندارد چون سرور خودش
+  // فقط اجازه‌ی «اضافه‌کردن یک سفارش» و «کم‌کردن کیف پول همان مشتری» را می‌دهد، نه بازنویسی
+  // کل داده - پس یک کاربر عادی نمی‌تواند با این مسیر چیز دیگری را تغییر بدهد.
+  async function submitOrder(order, customerId, deductAmount) {
+    pendingWritesRef.current += 1;
+    const run = () =>
+      fetch(DATA_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "placeOrder", order, customerId, deductAmount: deductAmount || 0 }),
+      })
+        .catch(() => {})
+        .finally(() => {
+          pendingWritesRef.current -= 1;
+        });
+    persistChainRef.current = persistChainRef.current.then(run);
+    return persistChainRef.current;
+  }
+
+  // تغییر نام/رمز توسط خود مشتری. نیازی به توکن مدیر ندارد، ولی سرور قبل از اعمال تغییر
+  // رمز فعلی مشتری را بررسی می‌کند تا کاربر دیگری نتواند حساب این مشتری را تغییر دهد.
+  async function updateOwnProfile(customerId, currentPassword, updates) {
+    pendingWritesRef.current += 1;
+    const run = () =>
+      fetch(DATA_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateProfile", customerId, currentPassword, ...updates }),
+      })
+        .catch(() => {})
+        .finally(() => {
+          pendingWritesRef.current -= 1;
+        });
     persistChainRef.current = persistChainRef.current.then(run);
     return persistChainRef.current;
   }
@@ -442,7 +501,7 @@ export default function AfganApp() {
     }
     setOrders(newOrders);
     setCustomers(newCustomers);
-    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    submitOrder(full, currentCustomer ? currentCustomer.id : undefined, deductAmount || 0);
     sendOrderToTelegram(full);
     return full;
   }
@@ -655,7 +714,8 @@ export default function AfganApp() {
           <CustomerProfile
             customer={currentCustomer}
             customers={customers}
-            saveCustomers={saveCustomers}
+            updateOwnProfile={updateOwnProfile}
+            setCustomers={setCustomers}
             setCurrentCustomer={setCurrentCustomer}
             onLogout={() => {
               setCurrentCustomer(null);
@@ -1271,7 +1331,7 @@ function CustomerLogin({ customers, onLogin, onBack, showToast }) {
   );
 }
 
-function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustomer, onLogout, onBack, showToast }) {
+function CustomerProfile({ customer, customers, updateOwnProfile, setCustomers, setCurrentCustomer, onLogout, onBack, showToast }) {
   const [name, setName] = useState(customer.name || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -1281,9 +1341,12 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
       showToast("نام نمی‌تواند خالی باشد");
       return;
     }
+    // به‌روزرسانی محلی برای نمایش فوری؛ ذخیره‌ی واقعی روی سرور از مسیر امن
+    // updateOwnProfile انجام می‌شود که رمز فعلی مشتری را هم بررسی می‌کند.
     const next = customers.map((c) => (c.id === customer.id ? { ...c, name } : c));
-    saveCustomers(next);
+    setCustomers(next);
     setCurrentCustomer({ ...customer, name });
+    updateOwnProfile(customer.id, customer.password, { name });
     showToast("نام به‌روزرسانی شد");
   }
 
@@ -1297,8 +1360,9 @@ function CustomerProfile({ customer, customers, saveCustomers, setCurrentCustome
       return;
     }
     const next = customers.map((c) => (c.id === customer.id ? { ...c, password: newPassword } : c));
-    saveCustomers(next);
+    setCustomers(next);
     setCurrentCustomer({ ...customer, password: newPassword });
+    updateOwnProfile(customer.id, customer.password, { newPassword });
     setNewPassword("");
     setConfirmPassword("");
     showToast("رمز عبور تغییر یافت");
