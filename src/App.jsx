@@ -236,6 +236,7 @@ export default function AfganApp() {
   const [creditSettings, setCreditSettings] = useState(null);
   const [orders, setOrders] = useState(null);
   const [cardInfo, setCardInfo] = useState(null);
+  const [adBannerText, setAdBannerText] = useState(null);
   const [customers, setCustomers] = useState(null);
   const [operators, setOperators] = useState(null);
   const [currentCustomer, setCurrentCustomer] = useState(null);
@@ -290,6 +291,7 @@ export default function AfganApp() {
           setCreditSettings((prev) => (JSON.stringify(prev) !== JSON.stringify(record.creditSettings) ? record.creditSettings : prev));
           setOrders((prev) => (JSON.stringify(prev) !== JSON.stringify(record.orders) ? record.orders : prev));
           setCardInfo((prev) => (JSON.stringify(prev) !== JSON.stringify(record.cardInfo) ? record.cardInfo : prev));
+          setAdBannerText((prev) => (record.adBannerText !== prev ? record.adBannerText : prev));
           setCustomers((prev) => (JSON.stringify(prev) !== JSON.stringify(record.customers) ? record.customers : prev));
           setOperators((prev) => (JSON.stringify(prev) !== JSON.stringify(record.operators) ? record.operators : prev));
         }
@@ -317,6 +319,7 @@ export default function AfganApp() {
     let creditSettings = (record && record.creditSettings) || null;
     let orders = (record && record.orders) || [];
     let cardInfo = (record && record.cardInfo) || { number: "", holder: "", phone: "", whatsapp: "" };
+    let adBannerText = record && record.adBannerText != null ? record.adBannerText : DEFAULT_AD_BANNER_TEXT;
     let customers = (record && record.customers) || [];
     let operators = (record && record.operators) || [];
     let needsSeed = false;
@@ -339,6 +342,9 @@ export default function AfganApp() {
         needsSeed = true;
       }
       if (!record || !record.cardInfo) {
+        needsSeed = true;
+      }
+      if (!record || record.adBannerText == null) {
         needsSeed = true;
       }
       if (!record || !record.customers) {
@@ -364,7 +370,7 @@ export default function AfganApp() {
             "Content-Type": "application/json",
             Authorization: "Bearer " + getAdminToken(),
           },
-          body: JSON.stringify({ products, rates, creditSettings, orders, cardInfo, customers, operators }),
+          body: JSON.stringify({ products, rates, creditSettings, orders, cardInfo, adBannerText, customers, operators }),
         });
       } catch (e) {}
     }
@@ -374,6 +380,7 @@ export default function AfganApp() {
     setCreditSettings(creditSettings);
     setOrders(orders);
     setCardInfo(cardInfo);
+    setAdBannerText(adBannerText);
     setCustomers(customers);
     setOperators(operators);
     setLoaded(true);
@@ -443,31 +450,35 @@ export default function AfganApp() {
 
   async function saveProducts(next) {
     setProducts(next);
-    persist({ products: next, rates, creditSettings, orders, cardInfo, customers, operators });
+    persist({ products: next, rates, creditSettings, orders, cardInfo, adBannerText, customers, operators });
   }
   async function saveRates(next) {
     setRates(next);
-    persist({ products, rates: next, creditSettings, orders, cardInfo, customers, operators });
+    persist({ products, rates: next, creditSettings, orders, cardInfo, adBannerText, customers, operators });
   }
   async function saveCreditSettings(next) {
     setCreditSettings(next);
-    persist({ products, rates, creditSettings: next, orders, cardInfo, customers, operators });
+    persist({ products, rates, creditSettings: next, orders, cardInfo, adBannerText, customers, operators });
   }
   async function saveOrders(next) {
     setOrders(next);
-    persist({ products, rates, creditSettings, orders: next, cardInfo, customers, operators });
+    persist({ products, rates, creditSettings, orders: next, cardInfo, adBannerText, customers, operators });
   }
   async function saveCardInfo(next) {
     setCardInfo(next);
-    persist({ products, rates, creditSettings, orders, cardInfo: next, customers, operators });
+    persist({ products, rates, creditSettings, orders, cardInfo: next, adBannerText, customers, operators });
+  }
+  async function saveAdBannerText(next) {
+    setAdBannerText(next);
+    persist({ products, rates, creditSettings, orders, cardInfo, adBannerText: next, customers, operators });
   }
   async function saveCustomers(next) {
     setCustomers(next);
-    persist({ products, rates, creditSettings, orders, cardInfo, customers: next, operators });
+    persist({ products, rates, creditSettings, orders, cardInfo, adBannerText, customers: next, operators });
   }
   async function saveOperators(next) {
     setOperators(next);
-    persist({ products, rates, creditSettings, orders, cardInfo, customers, operators: next });
+    persist({ products, rates, creditSettings, orders, cardInfo, adBannerText, customers, operators: next });
   }
 
   function showToast(msg) {
@@ -529,7 +540,7 @@ export default function AfganApp() {
     }
     setOrders(newOrders);
     setCustomers(newCustomers);
-    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, customers: newCustomers, operators });
+    persist({ products, rates, creditSettings, orders: newOrders, cardInfo, adBannerText, customers: newCustomers, operators });
   }
 
   function requireLogin() {
@@ -554,7 +565,7 @@ export default function AfganApp() {
       <Style />
       <Header onAdmin={() => setPage(isAdmin ? "admin" : "adminLogin")} onCustomer={() => setPage(currentCustomer ? "customerProfile" : "customerLogin")} />
       <main className="afgan-main">
-        {page === "home" && <Home rates={rates} cardInfo={cardInfo} currentCustomer={currentCustomer} setPage={setPage} />}
+        {page === "home" && <Home rates={rates} cardInfo={cardInfo} adBannerText={adBannerText} currentCustomer={currentCustomer} setPage={setPage} />}
         {page === "internet" && (
           <CategoryShop
             title="بسته اینترنت"
@@ -735,6 +746,7 @@ export default function AfganApp() {
             creditSettings={creditSettings}
             orders={orders}
             cardInfo={cardInfo}
+            adBannerText={adBannerText}
             customers={customers}
             operators={operators}
             tab={adminTab}
@@ -745,6 +757,7 @@ export default function AfganApp() {
             saveOrders={saveOrders}
             updateOrderStatus={updateOrderStatus}
             saveCardInfo={saveCardInfo}
+            saveAdBannerText={saveAdBannerText}
             saveCustomers={saveCustomers}
             saveOperators={saveOperators}
             onLogout={() => {
@@ -794,9 +807,27 @@ function PageHeader({ title, icon, onBack }) {
   );
 }
 
-function Home({ rates, cardInfo, currentCustomer, setPage }) {
+// متن پیش‌فرض نوار تبلیغاتی (فقط برای اولین بار که هنوز مدیر چیزی ثبت نکرده استفاده می‌شود).
+// بعد از آن، متن واقعی از تب «تبلیغات» در پنل مدیریت خوانده و ذخیره می‌شود.
+const DEFAULT_AD_BANNER_TEXT =
+  "🔥 ویژه امروز: پرداخت آنی و بدون کارمزد اضافه  •  ارسال حواله به سراسر جهان در کمتر از چند دقیقه  •  برای تخفیف ویژه با ما در واتساپ در تماس باشید";
+
+function AdBanner({ text }) {
+  if (!text || !text.trim()) return null;
+  return (
+    <div className="ad-banner" role="note" aria-label="تبلیغات">
+      <div className="ad-banner-track">
+        <span className="ad-banner-text">{text}</span>
+        <span className="ad-banner-text" aria-hidden="true">{text}</span>
+      </div>
+    </div>
+  );
+}
+
+function Home({ rates, cardInfo, adBannerText, currentCustomer, setPage }) {
   return (
     <div className="fade-in">
+      <AdBanner text={adBannerText} />
       <RateBoard rates={rates} />
       {currentCustomer && (
         <div className="wallet-card" style={{ marginBottom: 18 }}>
@@ -1408,7 +1439,7 @@ function CustomerProfile({ customer, customers, updateOwnProfile, setCustomers, 
 }
 
 
-function AdminPanel({ products, rates, creditSettings, orders, cardInfo, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveCustomers, saveOperators, onLogout, showToast }) {
+function AdminPanel({ products, rates, creditSettings, orders, cardInfo, adBannerText, customers, operators, tab, setTab, saveProducts, saveRates, saveCreditSettings, saveOrders, updateOrderStatus, saveCardInfo, saveAdBannerText, saveCustomers, saveOperators, onLogout, showToast }) {
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -1424,6 +1455,7 @@ function AdminPanel({ products, rates, creditSettings, orders, cardInfo, custome
           ["orders", "سفارش‌ها"],
           ["rates", "نرخ ارز"],
           ["card", "کارت / واتساپ"],
+          ["banner", "تبلیغات"],
           ["customers", "مشتریان"],
         ].map(([key, label]) => (
           <button key={key} className={"admin-tab" + (tab === key ? " active" : "")} onClick={() => setTab(key)}>
@@ -1448,7 +1480,54 @@ function AdminPanel({ products, rates, creditSettings, orders, cardInfo, custome
       )}
       {tab === "rates" && <RatesManager rates={rates} saveRates={saveRates} showToast={showToast} />}
       {tab === "card" && <CardManager cardInfo={cardInfo} saveCardInfo={saveCardInfo} showToast={showToast} />}
+      {tab === "banner" && <AdBannerManager adBannerText={adBannerText} saveAdBannerText={saveAdBannerText} showToast={showToast} />}
       {tab === "customers" && <CustomersManager customers={customers} orders={orders} saveCustomers={saveCustomers} showToast={showToast} />}
+    </div>
+  );
+}
+
+function AdBannerManager({ adBannerText, saveAdBannerText, showToast }) {
+  const [draft, setDraft] = useState(adBannerText || "");
+
+  function save() {
+    saveAdBannerText(draft);
+    showToast("متن تبلیغاتی ذخیره شد");
+  }
+
+  function clearBanner() {
+    setDraft("");
+    saveAdBannerText("");
+    showToast("نوار تبلیغاتی مخفی شد");
+  }
+
+  return (
+    <div className="admin-section">
+      <div className="admin-section-title">
+        <span>📣 نوار تبلیغاتی</span>
+      </div>
+      <div className="order-form">
+        <label>
+          متن تبلیغ (بالای بخش نرخ ارز نمایش داده می‌شود)
+          <textarea
+            rows={3}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="مثال: امروز تخفیف ویژه روی حواله ارزی!"
+          />
+        </label>
+        <div className="admin-section-title" style={{ fontSize: 12, fontWeight: 400, color: "var(--ink-soft)" }}>
+          برای نمایش چند پیام پشت‌سرهم، آن‌ها را با علامت « • » از هم جدا کنید. اگر متن را خالی
+          بگذارید و ذخیره کنید، نوار تبلیغاتی از صفحه اصلی حذف می‌شود.
+        </div>
+        <button className="btn-primary full" onClick={save}>
+          ذخیره
+        </button>
+        {adBannerText ? (
+          <button className="btn-ghost full" onClick={clearBanner}>
+            حذف نوار تبلیغاتی
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -2451,11 +2530,40 @@ function Style() {
       .fade-in { animation: fadeIn 0.25s ease; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
+      .ad-banner {
+        margin: -34px 0 14px;
+        background: linear-gradient(90deg, var(--accent) 0%, #a97a24 100%);
+        border-radius: 14px;
+        padding: 10px 0;
+        overflow: hidden;
+        box-shadow: 0 8px 18px rgba(201,151,58,0.3);
+        position: relative;
+        z-index: 1;
+      }
+      .ad-banner-track {
+        display: flex;
+        width: max-content;
+        gap: 48px;
+        white-space: nowrap;
+        animation: adBannerScroll 22s linear infinite;
+      }
+      .ad-banner:hover .ad-banner-track { animation-play-state: paused; }
+      .ad-banner-text {
+        font-size: 13px;
+        font-weight: 700;
+        color: #1f2a1a;
+        padding-left: 48px;
+      }
+      @keyframes adBannerScroll {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
+
       .rate-board {
         background: var(--board-bg);
         border-radius: 20px;
         padding: 14px 16px 16px;
-        margin: -34px 0 18px;
+        margin: 0 0 18px;
         box-shadow: 0 10px 24px rgba(10,54,47,0.25);
       }
       .rate-board-title { display: flex; justify-content: space-between; color: var(--accent-soft); font-size: 13px; margin-bottom: 10px; font-weight: 600; }
