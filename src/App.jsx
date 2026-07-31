@@ -814,11 +814,21 @@ const DEFAULT_AD_BANNER_TEXT =
 
 function AdBanner({ text }) {
   if (!text || !text.trim()) return null;
+  const clean = text.trim();
+  // برای این‌که نوار همیشه پر باشد و هیچ‌وقت خالی/غیب نشود (حتی وقتی متن مدیر خیلی کوتاه است)،
+  // متن را آن‌قدر تکرار می‌کنیم تا هر «دور» حداقل چند صد کاراکتر باشد - یعنی همیشه از عرض صفحه
+  // بیشتر است و در حین حرکتِ یک‌نواخت، جای خالی دیده نمی‌شود.
+  const MIN_GROUP_LENGTH = 220;
+  const repeatCount = Math.max(4, Math.ceil(MIN_GROUP_LENGTH / (clean.length + 3)));
+  const groupText = Array.from({ length: repeatCount }, () => clean).join("   •   ");
+  // سرعت حرکت را متناسب با طول متنِ تکرارشده تنظیم می‌کنیم تا سرعت عبور همیشه یک‌نواخت
+  // به‌نظر برسد، چه متن کوتاه باشد چه بلند.
+  const durationSec = Math.min(70, Math.max(18, Math.round(groupText.length * 0.17)));
   return (
     <div className="ad-banner" role="note" aria-label="تبلیغات">
-      <div className="ad-banner-track">
-        <span className="ad-banner-text">{text}</span>
-        <span className="ad-banner-text" aria-hidden="true">{text}</span>
+      <div className="ad-banner-track" style={{ animationDuration: durationSec + "s" }}>
+        <span className="ad-banner-text">{groupText}</span>
+        <span className="ad-banner-text" aria-hidden="true">{groupText}</span>
       </div>
     </div>
   );
@@ -2539,20 +2549,23 @@ function Style() {
         box-shadow: 0 8px 18px rgba(201,151,58,0.3);
         position: relative;
         z-index: 1;
+        direction: ltr;
       }
       .ad-banner-track {
         display: flex;
         width: max-content;
-        gap: 48px;
         white-space: nowrap;
+        direction: ltr;
         animation: adBannerScroll 22s linear infinite;
       }
       .ad-banner:hover .ad-banner-track { animation-play-state: paused; }
       .ad-banner-text {
+        direction: rtl;
+        unicode-bidi: plaintext;
         font-size: 13px;
         font-weight: 700;
         color: #1f2a1a;
-        padding-left: 48px;
+        padding-inline-end: 48px;
       }
       @keyframes adBannerScroll {
         from { transform: translateX(0); }
