@@ -3,17 +3,24 @@
 // این تابع سرورلس، داده‌های اصلی اپ (محصولات، نرخ‌ها، سفارش‌ها، مشتری‌ها، اپراتورها و ...)
 // را در Netlify Blobs ذخیره و بازیابی می‌کند — جایگزین JSONBin.
 //
-// GET          -> آخرین داده‌ی ذخیره‌شده را برمی‌گرداند: { record: {...} } یا { record: null }
-//                 (بدون نیاز به ورود؛ برای نمایش محصولات به همه‌ی بازدیدکننده‌ها لازم است)
-// POST / PUT   -> بدنه‌ی JSON درخواست را به‌عنوان جدیدترین نسخه‌ی داده ذخیره می‌کند
-//                 (فقط با یک توکن معتبر ورود مدیر — در هدر Authorization: Bearer <token>)
+// GET                          -> آخرین داده‌ی ذخیره‌شده را برمی‌گرداند: { record: {...} } یا { record: null }
+//                                 (بدون نیاز به ورود؛ برای نمایش محصولات به همه لازم است)
+//
+// POST / PUT بدون action        -> بازنویسی کامل داده (کاری که پنل مدیریت انجام می‌دهد).
+//                                 فقط با یک توکن معتبر ورود مدیر پذیرفته می‌شود
+//                                 (هدر Authorization: Bearer <token>).
+//
+// POST { action: "placeOrder" } -> ثبت سفارش توسط مشتری. توکن ادمین لازم ندارد، ولی سرور
+//                                 خودش سفارش را فقط اضافه می‌کند (نه جایگزین همه‌چیز) و فقط
+//                                 کیف پول همان مشتری را کم می‌کند.
+//
+// POST { action: "updateProfile" } -> تغییر نام/رمز توسط خود مشتری. توکن ادمین لازم ندارد،
+//                                 ولی سرور قبل از اعمال تغییر، رمز فعلی مشتری را بررسی می‌کند.
 //
 // نیازمند این متغیرهای محیطی در پنل Netlify (Site configuration → Environment variables):
 //   BLOBS_SITE_ID       شناسه‌ی سایت (Site ID) از Site configuration → General → Site details
 //   BLOBS_TOKEN         یک Personal Access Token از User settings → Applications → New access token
 //   ADMIN_TOKEN_SECRET  همان کلید مخفی که در netlify/functions/admin-login.js برای امضای توکن ورود استفاده می‌شود
-// این مقادیر مستقیم به getStore داده می‌شوند تا مشکل تشخیص خودکار محیط Blobs
-// (خطای MissingBlobsEnvironmentError) که در برخی سایت‌های Netlify رخ می‌دهد، دور زده شود.
 
 import { getStore } from "@netlify/blobs";
 import crypto from "crypto";
@@ -41,7 +48,6 @@ function isValidAdminToken(token) {
     .update(payloadStr)
     .digest("base64url");
 
-  // مقایسه‌ی امن در برابر حملات زمان‌سنجی (timing attack)
   const sigBuf = Buffer.from(sig);
   const expectedBuf = Buffer.from(expectedSig);
   if (sigBuf.length !== expectedBuf.length) return false;
@@ -61,6 +67,11 @@ function getBearerToken(event) {
   const header = (event.headers && (event.headers.authorization || event.headers.Authorization)) || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1] : null;
+}
+
+function normalizeWallet(wallet) {
+  if (wallet && typeof wallet === "object") return wallet;
+  return { TOMAN: Number(wallet) || 0 };
 }
 
 export const handler = async (event) => {
@@ -83,18 +94,100 @@ export const handler = async (event) => {
   }
 
   if (event.httpMethod === "POST" || event.httpMethod === "PUT") {
-    // فقط درخواست‌هایی که یک توکن معتبر ورود مدیر دارند اجازه‌ی نوشتن دارند.
-    const token = getBearerToken(event);
-    if (!isValidAdminToken(token)) {
-      return { statusCode: 401, body: JSON.stringify({ error: "دسترسی غیرمجاز." }) };
-    }
-
     let body;
     try {
       body = JSON.parse(event.body || "{}");
     } catch (e) {
       return { statusCode: 400, body: JSON.stringify({ error: "بدنه درخواست نامعتبر است." }) };
     }
+
+    // ------- ثبت سفارش توسط مشتری (بدون نیاز به توکن ادمین) -------
+    if (body.action === "placeOrder") {
+      const { order, customerId, deductAmount } = body;
+      if (!order || typeof order !== "object") {
+        return { statusCode: 400, body: JSON.stringify({ error: "سفارش نامعتبر است." }) };
+      }
+      const amount = Number(deductAmount) || 0;
+      if (amount < 0) {
+        return { statusCode: 400, body: JSON.stringify({ error: "مبلغ نامعتبر است." }) };
+      }
+
+      let record;
+      try {
+        record = (await store.get(KEY, { type: "json" })) || {};
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err) }) };
+      }
+
+      const customers = record.customers || [];
+      let nextCustomers = customers;
+
+      if (customerId) {
+        const found = customers.find((c) => c.id === customerId);
+        if (!found) {
+          return { statusCode: 400, body: JSON.stringify({ error: "مشتری یافت نشد." }) };
+        }
+        if (amount > 0) {
+          nextCustomers = customers.map((c) =>
+            c.id === customerId
+              ? { ...c, wallet: { ...normalizeWallet(c.wallet), TOMAN: (Number(normalizeWallet(c.wallet).TOMAN) || 0) - amount } }
+              : c
+          );
+        }
+      }
+
+      const nextOrders = [order, ...(record.orders || [])];
+      const nextRecord = { ...record, orders: nextOrders, customers: nextCustomers };
+
+      try {
+        await store.setJSON(KEY, nextRecord);
+        return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err) }) };
+      }
+    }
+
+    // ------- تغییر نام/رمز توسط خود مشتری (بدون نیاز به توکن ادمین) -------
+    if (body.action === "updateProfile") {
+      const { customerId, currentPassword, name, newPassword } = body;
+      if (!customerId || typeof currentPassword !== "string") {
+        return { statusCode: 400, body: JSON.stringify({ error: "درخواست نامعتبر است." }) };
+      }
+
+      let record;
+      try {
+        record = (await store.get(KEY, { type: "json" })) || {};
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err) }) };
+      }
+
+      const customers = record.customers || [];
+      const found = customers.find((c) => c.id === customerId);
+      if (!found || found.password !== currentPassword) {
+        return { statusCode: 401, body: JSON.stringify({ error: "رمز عبور فعلی درست نیست." }) };
+      }
+
+      const nextCustomers = customers.map((c) =>
+        c.id === customerId
+          ? { ...c, ...(name ? { name } : {}), ...(newPassword ? { password: newPassword } : {}) }
+          : c
+      );
+      const nextRecord = { ...record, customers: nextCustomers };
+
+      try {
+        await store.setJSON(KEY, nextRecord);
+        return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      } catch (err) {
+        return { statusCode: 500, body: JSON.stringify({ error: String(err) }) };
+      }
+    }
+
+    // ------- بازنویسی کامل داده: فقط برای مدیر (نیازمند توکن معتبر) -------
+    const token = getBearerToken(event);
+    if (!isValidAdminToken(token)) {
+      return { statusCode: 401, body: JSON.stringify({ error: "دسترسی غیرمجاز." }) };
+    }
+
     try {
       await store.setJSON(KEY, body);
       return { statusCode: 200, body: JSON.stringify({ ok: true }) };
