@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 
-const ADMIN_EMAIL = "mahdisultani10@gmail.com";
-const ADMIN_PASSWORD = "Mahdi35";
+// نکته امنیتی: ایمیل و رمز مدیر دیگر اینجا نوشته نمی‌شود. بررسی ورود مدیر
+// حالا سمت سرور، در netlify/functions/admin-login.js انجام می‌شود که مقادیر
+// را از Environment Variables نتلیفای (ADMIN_EMAIL / ADMIN_PASSWORD) می‌خواند.
 
 // ====== DATA STORAGE CONFIG ======
 // داده‌های اپ از طریق فانکشن نتلیفای (netlify/functions/data.js) در Netlify Blobs
@@ -612,12 +613,25 @@ export default function AfganApp() {
         {page === "orders" && <MyOrders orders={orders} currentCustomer={currentCustomer} onBack={() => setPage("home")} />}
         {page === "adminLogin" && (
           <AdminLogin
-            onLogin={(email, pw) => {
-              if (email === ADMIN_EMAIL && pw === ADMIN_PASSWORD) {
-                setIsAdmin(true);
-                setPage("admin");
-              } else {
-                showToast("ایمیل یا رمز عبور اشتباه است");
+            onLogin={async (email, pw) => {
+              try {
+                const res = await fetch("/.netlify/functions/admin-login", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ email, password: pw }),
+                });
+                const data = await res.json();
+                if (res.ok && data.ok) {
+                  try {
+                    localStorage.setItem("afgan_admin_token", data.token);
+                  } catch (e) {}
+                  setIsAdmin(true);
+                  setPage("admin");
+                } else {
+                  showToast("ایمیل یا رمز عبور اشتباه است");
+                }
+              } catch (e) {
+                showToast("خطا در برقراری ارتباط با سرور");
               }
             }}
             onBack={() => setPage("home")}
@@ -1115,15 +1129,17 @@ function AdminLogin({ onLogin, onBack }) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
     if (loading) return;
     setLoading(true);
-    // small delay just for the loading animation; the real check happens in onLogin
-    setTimeout(() => {
+    // onLogin now makes a real network request to /.netlify/functions/admin-login,
+    // so we keep the loading state on until that finishes.
+    try {
+      await onLogin(email, password);
+    } finally {
       setLoading(false);
-      onLogin(email, password);
-    }, 650);
+    }
   }
 
   return (
